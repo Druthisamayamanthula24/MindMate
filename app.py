@@ -455,8 +455,7 @@ if page == "🏠 Dashboard":
 # ================= SMART DAILY PLAN =======================
 elif page == "🧠 Smart Daily Plan":
     st.markdown('<div class="main-title">🧠 Smart Daily Study Plan</div>',unsafe_allow_html=True)
-    st.markdown("<div class="subtitle">MindMate creates today's plan from your exams, confidence, syllabus, quizzes and study history.</div>',unsafe_allow_html=True)
-
+    st.markdown("<div class='subtitle'>MindMate creates today's plan from your exams, confidence, syllabus, quizzes and study history.</div>", unsafe_allow_html=True)
     plan = generate_smart_daily_plan()
 
     if not plan:
