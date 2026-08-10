@@ -1,7 +1,7 @@
-streamlit
-pandas
-plotly
 google-generativeai
 opencv-python
 Pillow
 numpy
+streamlit>=1.40,<2
+pandas>=2.0
+plotly>=5.0
