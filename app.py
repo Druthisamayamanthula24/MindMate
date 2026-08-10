@@ -69,14 +69,6 @@ st.markdown("""
     font-size: 14px;
     opacity: .9;
 }
-.chat-container {
-    padding: 20px;
-    border-radius: 14px;
-    background: #f8f9fa;
-    border: 1px solid #e9ecef;
-    max-height: 500px;
-    overflow-y: auto;
-}
 .chat-message {
     padding: 10px 15px;
     border-radius: 10px;
@@ -98,11 +90,6 @@ st.markdown("""
     color: #999;
     text-align: right;
     margin-top: 2px;
-}
-.feed-container {
-    max-height: 600px;
-    overflow-y: auto;
-    padding: 10px;
 }
 .feed-item {
     padding: 12px;
@@ -151,29 +138,6 @@ st.markdown("""
 }
 .sudoku-cell.fixed {
     background: #e9ecef;
-}
-.arrow-cell {
-    aspect-ratio: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 28px;
-    background: white;
-    border: 2px solid #dee2e6;
-    border-radius: 10px;
-    cursor: pointer;
-    transition: all 0.3s;
-}
-.arrow-cell:hover {
-    transform: scale(1.05);
-    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-}
-.timer-display {
-    font-size: 48px;
-    font-weight: 700;
-    text-align: center;
-    color: #667eea;
-    font-family: monospace;
 }
 .bot-status {
     display: inline-block;
@@ -849,13 +813,39 @@ def show_activity_feed():
         return
     
     # Filters
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2 = st.columns([2, 2])
     with col1:
         activity_types = ["All"] + list(feed["activity_type"].unique())
         filter_type = st.selectbox("Filter by Type", activity_types)
     with col2:
         if filter_type != "All":
             feed = feed[feed["activity_type"] == filter_type]
+        st.caption(f"Showing {len(feed)} activities")
     
     # Sort by time (newest first)
-    feed = feed.sort_values("timestamp",
+    feed = feed.sort_values("timestamp", ascending=False)
+    
+    # Display feed items
+    for _, item in feed.iterrows():
+        icon_map = {
+            "Subject Added": "📚",
+            "Exam Added": "📅",
+            "Study Session": "⏱️",
+            "Quiz Taken": "📝",
+            "Marks Added": "📊",
+            "Coding Problem": "💻",
+            "Chat": "🤖",
+            "Puzzle Solved": "🧩",
+            "Timetable Added": "📋"
+        }
+        icon = icon_map.get(item["activity_type"], "📌")
+        
+        st.markdown(f"""
+        <div class="feed-item">
+            <div>
+                <span class="icon">{icon}</span>
+                <strong>{item['activity_type']}</strong>
+                <span class="time">• {item['timestamp'].strftime('%I:%M %p, %b %d')}</span>
+            </div>
+            <div>{item['description']}</div>
+            {f"<div style='font-size:12px;color:#666;margin-top:4px;
