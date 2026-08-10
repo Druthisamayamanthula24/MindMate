@@ -1,25 +1,45 @@
+
 import streamlit as st
 import sqlite3
 import hashlib
-import random
-import time
-import datetime as dt
+import secrets
 import json
-from pathlib import Path
+import random
+import requests
+import time
+from datetime import datetime, date, timedelta
 
 import pandas as pd
+import plotly.express as px
 import plotly.graph_objects as go
+import streamlit.components.v1 as components
 
 # ============================================================
-# MINDMATE - SMART STUDY COMPANION
-# Final structure:
-# Login -> Dashboard -> Study Planner -> Tomorrow's Plan ->
-# Adaptive Quiz -> Doubt Chatbot -> Coding Tracker ->
-# Stress Monitor -> Puzzle Zone -> Analytics -> Settings -> Logout
+# MINDMATE - FINAL PROJECT VERSION
+# ============================================================
+# 12 modules:
+# 1 Login
+# 2 Dashboard
+# 3 Study Planner
+# 4 Tomorrow's Plan
+# 5 Adaptive Quiz
+# 6 Doubt Chatbot
+# 7 Coding Tracker
+# 8 Stress Monitor
+# 9 Puzzle Zone
+# 10 Analytics
+# 11 Settings
+# 12 Logout
 #
-# Core loop:
-# Semester subjects -> Topic -> Study timer -> Unique quiz ->
-# Performance -> Weak topic -> Tomorrow's plan -> Analytics
+# Important design:
+# - User creates their own account/password.
+# - User enters their own semester subjects and exam schedule.
+# - No previous-semester CGPA/marks are required.
+# - Study timer is required before a topic quiz can be started.
+# - Quiz question IDs are permanently recorded per user.
+# - Puzzle IDs are permanently recorded per user.
+# - Coding activity is tracked by date/language/user coding ID.
+# - Analytics use actual current MindMate activity.
 # ============================================================
 
 st.set_page_config(
@@ -29,1417 +49,331 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# ============================================================
-# CONFIG / CONSTANTS
-# ============================================================
-DB_PATH = Path("mindmate.db")
+DB_FILE = "mindmate.db"
 
-ALL_SUBJECTS = [
-    "Data Structures", "Python", "COA", "Modern Physics", "CRTC",
-    "DBMS", "DAE", "ASE", "AI", "C++", "P&S", "ADSAA"
-]
+# ----------------------------- UI -----------------------------
+st.markdown(
+    """
+    <style>
+    .main-header {font-size: 2.8rem; font-weight: 800; color:#4A90E2;}
+    .card {padding:18px;border-radius:16px;background:#f7f9fc;border:1px solid #e6eaf0;margin-bottom:12px;}
+    .hero {padding:22px;border-radius:18px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;}
+    .ok {padding:14px;border-radius:12px;background:#eaf8ee;border-left:5px solid #2e9d50;}
+    .warn {padding:14px;border-radius:12px;background:#fff7df;border-left:5px solid #e5a100;}
+    .weak {padding:14px;border-radius:12px;background:#fff0f0;border-left:5px solid #e34d59;}
+    .stButton>button {border-radius:10px;font-weight:600;}
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
-TOPICS = {
-    "Data Structures": [
-        "Arrays",
-        "Stacks & Queues",
-        "Linked Lists",
-        "Trees",
-        "Graphs"
-    ],
-    "Python": [
-        "Functions",
-        "OOP",
-        "Exceptions",
-        "File Handling",
-        "Recursion"
-    ],
-    "COA": [
-        "CPU Organization",
-        "ALU",
-        "Cache Memory",
-        "DMA",
-        "Memory Hierarchy"
-    ],
-    "Modern Physics": [
-        "Quantum Theory",
-        "Photoelectric Effect",
-        "Dual Nature",
-        "Atoms",
-        "Nuclear Physics"
-    ],
-    "CRTC": [
-        "Aptitude",
-        "Logical Reasoning",
-        "Verbal Ability",
-        "Coding Basics",
-        "Communication"
-    ],
-    "DBMS": [
-        "ER Model",
-        "SQL",
-        "Normalization",
-        "Transactions",
-        "Indexing"
-    ],
-    "DAE": [
-        "Differential Equations",
-        "Laplace Transform",
-        "Fourier Series",
-        "Partial Derivatives",
-        "Applications"
-    ],
-    "ASE": [
-        "Software Engineering",
-        "SDLC",
-        "Requirements",
-        "Testing",
-        "Agile"
-    ],
-    "AI": [
-        "AI Basics",
-        "Search",
-        "Machine Learning",
-        "Neural Networks",
-        "Ethics"
-    ],
-    "C++": [
-        "Syntax & STL",
-        "OOP",
-        "Pointers",
-        "Templates",
-        "STL Algorithms"
-    ],
-    "P&S": [
-        "Probability",
-        "Random Variables",
-        "Distributions",
-        "Statistics",
-        "Hypothesis Testing"
-    ],
-    "ADSAA": [
-        "Advanced Data Structures",
-        "Algorithms",
-        "Complexity",
-        "Dynamic Programming",
-        "Greedy Algorithms"
-    ]
-}
-
-QUESTION_BANK = {'Data Structures': {'Arrays': [('ds-arr-01',
-                                 'What is the first index of a zero-based array?',
-                                 ['0', '1', '-1', 'Depends'],
-                                 '0'),
-                                ('ds-arr-02',
-                                 'Which array operation is generally O(1) when the index is known?',
-                                 ['Random access', 'Insertion at beginning', 'Deletion at beginning', 'Linear search'],
-                                 'Random access'),
-                                ('ds-arr-03',
-                                 'Which structure stores elements in contiguous memory in the usual array model?',
-                                 ['Array', 'Linked list', 'Tree', 'Graph'],
-                                 'Array'),
-                                ('ds-arr-04',
-                                 'For an array of n elements, linear search has worst-case time complexity:',
-                                 ['O(1)', 'O(log n)', 'O(n)', 'O(n²)'],
-                                 'O(n)')],
-                     'Stacks & Queues': [('ds-sq-01',
-                                          'A stack follows which principle?',
-                                          ['FIFO', 'LIFO', 'Random', 'Priority'],
-                                          'LIFO'),
-                                         ('ds-sq-02',
-                                          'Which operation adds an item to a stack?',
-                                          ['Push', 'Pop', 'Peek', 'Dequeue'],
-                                          'Push'),
-                                         ('ds-sq-03',
-                                          'A normal queue follows which principle?',
-                                          ['LIFO', 'FIFO', 'Random', 'Divide and conquer'],
-                                          'FIFO'),
-                                         ('ds-sq-04',
-                                          'Which structure is commonly used for breadth-first search?',
-                                          ['Stack', 'Queue', 'Heap', 'Hash table'],
-                                          'Queue')],
-                     'Linked Lists': [('ds-ll-01',
-                                       'A singly linked-list node normally contains data and:',
-                                       ['A next pointer', 'Two stacks', 'A queue', 'A matrix'],
-                                       'A next pointer'),
-                                      ('ds-ll-02',
-                                       'Insertion at the head of a linked list can be done in:',
-                                       ['O(1)', 'O(log n)', 'O(n)', 'O(n²)'],
-                                       'O(1)'),
-                                      ('ds-ll-03',
-                                       'Which linked list has pointers in both directions?',
-                                       ['Singly', 'Doubly', 'Circular singly only', 'Static'],
-                                       'Doubly'),
-                                      ('ds-ll-04',
-                                       "A circular linked list's last node points to:",
-                                       ['NULL', 'The first node', 'Itself always', 'The middle node'],
-                                       'The first node')],
-                     'Trees': [('ds-tr-01',
-                                'Which traversal of a binary search tree gives sorted order?',
-                                ['Preorder', 'Inorder', 'Postorder', 'Level order'],
-                                'Inorder'),
-                               ('ds-tr-02',
-                                'A tree with n nodes has how many edges?',
-                                ['n', 'n-1', 'n+1', '2n'],
-                                'n-1'),
-                               ('ds-tr-03',
-                                'A node with no children is called a:',
-                                ['Root', 'Leaf', 'Parent', 'Sibling'],
-                                'Leaf'),
-                               ('ds-tr-04',
-                                'Which structure is a self-balancing binary search tree?',
-                                ['AVL tree', 'Stack', 'Queue', 'Hash table'],
-                                'AVL tree')],
-                     'Graphs': [('ds-gr-01',
-                                 'A graph is primarily made of:',
-                                 ['Vertices and edges', 'Rows and columns', 'Keys and values', 'Stacks and queues'],
-                                 'Vertices and edges'),
-                                ('ds-gr-02',
-                                 'Which traversal normally uses a queue?',
-                                 ['BFS', 'DFS', 'Inorder', 'Postorder'],
-                                 'BFS'),
-                                ('ds-gr-03',
-                                 'Which traversal can be implemented using a stack?',
-                                 ['BFS', 'DFS', 'Level order', 'None'],
-                                 'DFS'),
-                                ('ds-gr-04',
-                                 'An edge from a vertex to itself is called a:',
-                                 ['Loop', 'Leaf', 'Root', 'Bridge'],
-                                 'Loop')]},
- 'Python': {'Functions': [('py-fn-01',
-                           'Which keyword defines a function in Python?',
-                           ['func', 'def', 'function', 'define'],
-                           'def'),
-                          ('py-fn-02',
-                           'Which keyword sends a value back from a function?',
-                           ['send', 'return', 'back', 'yieldonly'],
-                           'return'),
-                          ('py-fn-03',
-                           'What does *args collect?',
-                           ['Keyword arguments', 'Positional arguments', 'Modules', 'Exceptions'],
-                           'Positional arguments'),
-                          ('py-fn-04',
-                           'What does **kwargs collect?',
-                           ['Keyword arguments', 'Positional arguments', 'Lists only', 'Files'],
-                           'Keyword arguments')],
-            'OOP': [('py-oop-01', 'An object is an instance of a:', ['Class', 'Loop', 'File', 'Module only'], 'Class'),
-                    ('py-oop-02',
-                     'Which concept lets a class derive from another class?',
-                     ['Inheritance', 'Iteration', 'Hashing', 'Recursion'],
-                     'Inheritance'),
-                    ('py-oop-03',
-                     'Which method commonly initializes a Python object?',
-                     ['__start__', '__init__', 'initiate', 'constructor_only'],
-                     '__init__'),
-                    ('py-oop-04',
-                     'Hiding internal implementation details is called:',
-                     ['Encapsulation', 'Sorting', 'Parsing', 'Iteration'],
-                     'Encapsulation')],
-            'Exceptions': [('py-ex-01',
-                            'Which keyword starts a block that may raise an exception?',
-                            ['try', 'catch', 'error', 'handle'],
-                            'try'),
-                           ('py-ex-02',
-                            'Which keyword handles an exception?',
-                            ['catch', 'except', 'error', 'handle'],
-                            'except'),
-                           ('py-ex-03',
-                            'Which block normally runs whether an exception occurs or not?',
-                            ['try', 'except', 'finally', 'raise'],
-                            'finally'),
-                           ('py-ex-04',
-                            'Which keyword explicitly raises an exception?',
-                            ['throw', 'raise', 'except', 'error'],
-                            'raise')],
-            'File Handling': [('py-file-01', 'Which mode opens a file for reading?', ['r', 'w', 'a', 'x'], 'r'),
-                              ('py-file-02',
-                               'Which mode writes to a file and truncates existing content?',
-                               ['r', 'w', 'a', 'x'],
-                               'w'),
-                              ('py-file-03', 'Which mode appends to an existing file?', ['r', 'w', 'a', 'x'], 'a'),
-                              ('py-file-04',
-                               'Which pattern automatically closes a file?',
-                               ['with open()', 'if open()', 'for open()', 'open only'],
-                               'with open()')],
-            'Recursion': [('py-rec-01',
-                           'A recursive function needs a:',
-                           ['Base case', 'Database', 'Class only', 'GUI'],
-                           'Base case'),
-                          ('py-rec-02',
-                           'Recursive calls are tracked on the:',
-                           ['Call stack', 'Queue', 'Heap only', 'Hash table'],
-                           'Call stack'),
-                          ('py-rec-03',
-                           'Without a reachable base case, recursion may cause:',
-                           ['Infinite recursion', 'Sorting', 'Caching', 'Compilation'],
-                           'Infinite recursion'),
-                          ('py-rec-04',
-                           'Recursion solves a problem by reducing it to:',
-                           ['Smaller instances of the same problem', 'Only loops', 'Only files', 'Only classes'],
-                           'Smaller instances of the same problem')]},
- 'COA': {'CPU Organization': [('coa-cpu-01',
-                               'Which unit directs the operations of the CPU?',
-                               ['Control Unit', 'ALU', 'Cache', 'RAM'],
-                               'Control Unit'),
-                              ('coa-cpu-02',
-                               'The CPU component that performs arithmetic and logic is the:',
-                               ['ALU', 'CU', 'Register file only', 'DMA'],
-                               'ALU'),
-                              ('coa-cpu-03',
-                               'Which is a fast storage location inside the CPU?',
-                               ['Register', 'Hard disk', 'Optical disk', 'Printer'],
-                               'Register'),
-                              ('coa-cpu-04',
-                               'The usual first phase of instruction processing is:',
-                               ['Fetch', 'Print', 'Sort', 'Compile'],
-                               'Fetch')],
-         'ALU': [('coa-alu-01',
-                  'ALU stands for:',
-                  ['Arithmetic Logic Unit', 'Array Logic Unit', 'Application Link Unit', 'Arithmetic Link Utility'],
-                  'Arithmetic Logic Unit'),
-                 ('coa-alu-02', 'Which is a logical operation?', ['AND', 'Fetch', 'Store', 'Decode'], 'AND'),
-                 ('coa-alu-03',
-                  'Which is an arithmetic operation?',
-                  ['Addition', 'Jump', 'Fetch', 'Decode'],
-                  'Addition'),
-                 ('coa-alu-04', 'The ALU is a part of the:', ['CPU', 'Keyboard', 'Monitor', 'Disk'], 'CPU')],
-         'Cache Memory': [('coa-cache-01',
-                           'Cache is generally located between:',
-                           ['CPU and main memory', 'Keyboard and monitor', 'Disk and printer', 'Compiler and source'],
-                           'CPU and main memory'),
-                          ('coa-cache-02',
-                           'A cache hit means the requested data is:',
-                           ['Found in cache', 'Deleted', 'Only on disk', 'Unavailable'],
-                           'Found in cache'),
-                          ('coa-cache-03',
-                           'Which cache mapping allows a block to map to any cache line?',
-                           ['Fully associative', 'Direct', 'Fixed', 'Sequential'],
-                           'Fully associative'),
-                          ('coa-cache-04',
-                           'Cache improves performance mainly by reducing:',
-                           ['Average memory access time', 'Program size', 'Keyboard latency', 'Screen resolution'],
-                           'Average memory access time')],
-         'DMA': [('coa-dma-01',
-                  'DMA stands for:',
-                  ['Direct Memory Access', 'Data Memory Allocation', 'Digital Memory Access', 'Direct Module Access'],
-                  'Direct Memory Access'),
-                 ('coa-dma-02',
-                  'DMA is mainly used for transfers between:',
-                  ['I/O and memory', 'ALU and CU', 'Monitor and keyboard', 'ROM and printer'],
-                  'I/O and memory'),
-                 ('coa-dma-03',
-                  'The component that manages DMA transfers is the:',
-                  ['DMA controller', 'Compiler', 'ALU', 'Cache'],
-                  'DMA controller'),
-                 ('coa-dma-04',
-                  'DMA reduces the need for the CPU to handle:',
-                  ['Every byte of a bulk transfer', 'All instructions', 'All interrupts', 'All arithmetic'],
-                  'Every byte of a bulk transfer')],
-         'Memory Hierarchy': [('coa-mh-01',
-                               'Which is generally the fastest storage level?',
-                               ['Registers', 'RAM', 'SSD', 'Hard disk'],
-                               'Registers'),
-                              ('coa-mh-02',
-                               'As memory becomes faster, cost per bit generally:',
-                               ['Increases', 'Decreases to zero', 'Never changes', 'Becomes irrelevant'],
-                               'Increases'),
-                              ('coa-mh-03',
-                               'Main memory is commonly implemented using:',
-                               ['RAM', 'Keyboard', 'Monitor', 'Printer'],
-                               'RAM'),
-                              ('coa-mh-04',
-                               'Which level is larger but slower than cache?',
-                               ['Main memory', 'Register', 'ALU', 'Control unit'],
-                               'Main memory')]},
- 'Modern Physics': {'Quantum Theory': [('phy-q-01',
-                                        'Planck proposed that energy is emitted or absorbed in:',
-                                        ['Quanta', 'Only continuous waves', 'Circles', 'Matrices only'],
-                                        'Quanta'),
-                                       ('phy-q-02',
-                                        'Photon energy is given by:',
-                                        ['E = hf', 'E = mc', 'E = IR', 'E = Pt only'],
-                                        'E = hf'),
-                                       ('phy-q-03', "Planck's constant has SI unit:", ['J·s', 'N', 'W', 'C'], 'J·s'),
-                                       ('phy-q-04',
-                                        'The quantum description of light is associated with:',
-                                        ['Photons', 'Only sound waves', 'Only electrons', 'Only nuclei'],
-                                        'Photons')],
-                    'Photoelectric Effect': [('phy-pe-01',
-                                              'The minimum frequency needed for photoemission is called:',
-                                              ['Threshold frequency',
-                                               'Clock frequency',
-                                               'Beat frequency',
-                                               'Resonant current'],
-                                              'Threshold frequency'),
-                                             ('phy-pe-02',
-                                              'Increasing light intensity above threshold generally increases:',
-                                              ['Photoelectric current',
-                                               'Work function',
-                                               'Threshold frequency',
-                                               'Electron mass'],
-                                              'Photoelectric current'),
-                                             ('phy-pe-03',
-                                              'Maximum photoelectron kinetic energy depends mainly on:',
-                                              ['Light frequency', 'Only intensity', 'Wire length', 'Room temperature'],
-                                              'Light frequency'),
-                                             ('phy-pe-04',
-                                              'The photoelectric effect supports the:',
-                                              ['Particle nature of light',
-                                               'Only sound nature',
-                                               'Fluid nature of light',
-                                               'Heat-only model'],
-                                              'Particle nature of light')],
-                    'Dual Nature': [('phy-dn-01',
-                                     'de Broglie proposed that matter has:',
-                                     ['Wave nature', 'Only charge', 'Only heat', 'No motion'],
-                                     'Wave nature'),
-                                    ('phy-dn-02',
-                                     'Electron diffraction demonstrates:',
-                                     ['Matter waves', 'Only classical motion', 'Sound waves', 'Thermal radiation'],
-                                     'Matter waves'),
-                                    ('phy-dn-03',
-                                     'The de Broglie wavelength is inversely proportional to:',
-                                     ['Momentum', 'Mass only', 'Time only', 'Temperature'],
-                                     'Momentum'),
-                                    ('phy-dn-04',
-                                     'A photon has zero rest mass but carries:',
-                                     ['Energy and momentum', 'Only charge', 'Only rest mass', 'No momentum'],
-                                     'Energy and momentum')],
-                    'Atoms': [('phy-at-01',
-                               "Bohr's model introduced:",
-                               ['Quantized energy levels', 'Continuous energy only', 'No electrons', 'No nucleus'],
-                               'Quantized energy levels'),
-                              ('phy-at-02',
-                               'An emitted photon is produced when an electron moves to a:',
-                               ['Lower energy level', 'Higher level only', 'Random level', 'Nuclear state only'],
-                               'Lower energy level'),
-                              ('phy-at-03',
-                               'The nucleus contains:',
-                               ['Protons and neutrons', 'Only electrons', 'Only photons', 'Only atoms'],
-                               'Protons and neutrons'),
-                              ('phy-at-04',
-                               'Atomic spectra provide evidence for:',
-                               ['Discrete energy levels',
-                                'Only continuous energy',
-                                'No quantization',
-                                'Classical-only atoms'],
-                               'Discrete energy levels')],
-                    'Nuclear Physics': [('phy-nu-01',
-                                         'E = mc² relates:',
-                                         ['Mass and energy',
-                                          'Charge and current',
-                                          'Force and pressure',
-                                          'Time and distance'],
-                                         'Mass and energy'),
-                                        ('phy-nu-02',
-                                         'Radioactivity is the spontaneous transformation of:',
-                                         ['Unstable nuclei', 'Stable wires', 'Photons only', 'Atoms in all states'],
-                                         'Unstable nuclei'),
-                                        ('phy-nu-03',
-                                         'The atomic number equals the number of:',
-                                         ['Protons', 'Neutrons', 'Nucleons', 'Electrons plus neutrons'],
-                                         'Protons'),
-                                        ('phy-nu-04',
-                                         'Nuclear fission is the:',
-                                         ['Splitting of a heavy nucleus',
-                                          'Combining of two light nuclei',
-                                          'Emission of visible light',
-                                          'Removal of electrons'],
-                                         'Splitting of a heavy nucleus')]},
- 'CRTC': {'Aptitude': [('crtc-ap-01', 'What is 25% of 200?', ['25', '40', '50', '75'], '50'),
-                       ('crtc-ap-02', 'A 10% increase on 100 gives:', ['105', '110', '120', '90'], '110'),
-                       ('crtc-ap-03',
-                        "If a job takes 10 days for one person, one day's work is:",
-                        ['1/10', '1/5', '10', '1/20'],
-                        '1/10'),
-                       ('crtc-ap-04', 'The average of 10 and 20 is:', ['10', '15', '20', '30'], '15')],
-          'Logical Reasoning': [('crtc-lr-01',
-                                 'If all A are B and all B are C, then:',
-                                 ['All A are C', 'No A are C', 'Some A are not C', 'None'],
-                                 'All A are C'),
-                                ('crtc-lr-02',
-                                 'A sequence puzzle mainly tests:',
-                                 ['Pattern recognition', 'Typing', 'Drawing', 'Color choice'],
-                                 'Pattern recognition'),
-                                ('crtc-lr-03', 'Which does not belong: 2, 4, 6, 9?', ['2', '4', '6', '9'], '9'),
-                                ('crtc-lr-04',
-                                 'If today is Monday, what day is 3 days later?',
-                                 ['Tuesday', 'Wednesday', 'Thursday', 'Friday'],
-                                 'Thursday')],
-          'Verbal Ability': [('crtc-va-01',
-                              "Choose the synonym of 'rapid':",
-                              ['Slow', 'Quick', 'Weak', 'Late'],
-                              'Quick'),
-                             ('crtc-va-02',
-                              "Choose the antonym of 'ancient':",
-                              ['Old', 'Modern', 'Historic', 'Past'],
-                              'Modern'),
-                             ('crtc-va-03',
-                              "A word that means 'a place where books are kept' is:",
-                              ['Library', 'Laboratory', 'Gallery', 'Factory'],
-                              'Library'),
-                             ('crtc-va-04',
-                              'Choose the grammatically correct sentence:',
-                              ['She go to class.', 'She goes to class.', 'She going class.', 'She gone class.'],
-                              'She goes to class.')],
-          'Coding Basics': [('crtc-cb-01',
-                             'Which structure stores key-value pairs in many languages?',
-                             ['Map/Dictionary', 'Stack only', 'Queue only', 'Array index only'],
-                             'Map/Dictionary'),
-                            ('crtc-cb-02',
-                             'A loop is mainly used to:',
-                             ['Repeat instructions', 'Delete a program', 'Compile hardware', 'Encrypt a monitor'],
-                             'Repeat instructions'),
-                            ('crtc-cb-03',
-                             'A conditional statement is used to:',
-                             ['Make decisions', 'Store files only', 'Draw graphs only', 'Create hardware'],
-                             'Make decisions'),
-                            ('crtc-cb-04',
-                             'Which is a common algorithmic approach?',
-                             ['Divide and conquer', 'Print and erase', 'Click and drag', 'Copy and paste'],
-                             'Divide and conquer')],
-          'Communication': [('crtc-com-01',
-                             'Effective communication requires:',
-                             ['Clear message and active listening', 'Only speaking', 'Only writing', 'No feedback'],
-                             'Clear message and active listening'),
-                            ('crtc-com-02',
-                             'Feedback helps a speaker:',
-                             ['Understand how the message was received',
-                              'Avoid all questions',
-                              'Increase noise',
-                              'Remove context'],
-                             'Understand how the message was received'),
-                            ('crtc-com-03',
-                             'Non-verbal communication includes:',
-                             ['Body language', 'Only code', 'Only equations', 'Database keys'],
-                             'Body language'),
-                            ('crtc-com-04',
-                             'A concise message is usually:',
-                             ['Clear and brief', 'Long and repetitive', 'Ambiguous', 'Incomplete'],
-                             'Clear and brief')]},
- 'DBMS': {'ER Model': [('db-er-01',
-                        'An entity represents a:',
-                        ['Distinct real-world object', 'SQL keyword only', 'Transaction log', 'File extension'],
-                        'Distinct real-world object'),
-                       ('db-er-02',
-                        'An attribute describes an:',
-                        ['Entity property', 'Index page only', 'SQL transaction', 'Network packet'],
-                        'Entity property'),
-                       ('db-er-03',
-                        'A relationship represents an association between:',
-                        ['Entities', 'Only attributes', 'Only indexes', 'Only queries'],
-                        'Entities'),
-                       ('db-er-04',
-                        'A primary key should uniquely identify:',
-                        ['Each row/entity instance', 'Every database', 'Every table name', 'Every query'],
-                        'Each row/entity instance')],
-          'SQL': [('db-sql-01',
-                   'Which SQL command retrieves rows?',
-                   ['SELECT', 'FETCHFILE', 'GETROW', 'READ'],
-                   'SELECT'),
-                  ('db-sql-02', 'Which clause filters rows?', ['WHERE', 'ORDER', 'GROUP', 'HAVINGONLY'], 'WHERE'),
-                  ('db-sql-03', 'Which command adds a new row?', ['INSERT', 'ADDROW', 'PUT', 'CREATE'], 'INSERT'),
-                  ('db-sql-04',
-                   'Which command modifies existing rows?',
-                   ['UPDATE', 'CHANGE', 'MODIFYTABLE', 'EDIT'],
-                   'UPDATE')],
-          'Normalization': [('db-norm-01',
-                             'Normalization mainly reduces:',
-                             ['Data redundancy', 'CPU clock speed', 'Network bandwidth', 'Screen size'],
-                             'Data redundancy'),
-                            ('db-norm-02',
-                             'First Normal Form requires values to be:',
-                             ['Atomic', 'Encrypted', 'Sorted', 'Duplicated'],
-                             'Atomic'),
-                            ('db-norm-03',
-                             'A functional dependency describes a relationship between:',
-                             ['Attributes', 'Tables only', 'Files only', 'Queries only'],
-                             'Attributes'),
-                            ('db-norm-04',
-                             'Normalization can help reduce:',
-                             ['Update anomalies', 'Keyboard errors', 'CPU temperature', 'Display resolution'],
-                             'Update anomalies')],
-          'Transactions': [('db-tx-01',
-                            "The 'A' in ACID stands for:",
-                            ['Atomicity', 'Availability', 'Accuracy', 'Access'],
-                            'Atomicity'),
-                           ('db-tx-02',
-                            "The 'C' in ACID stands for:",
-                            ['Consistency', 'Concurrency', 'Compression', 'Compilation'],
-                            'Consistency'),
-                           ('db-tx-03',
-                            "The 'I' in ACID stands for:",
-                            ['Isolation', 'Indexing', 'Input', 'Iteration'],
-                            'Isolation'),
-                           ('db-tx-04',
-                            "The 'D' in ACID stands for:",
-                            ['Durability', 'Dependency', 'Data type', 'Distribution'],
-                            'Durability')],
-          'Indexing': [('db-ind-01',
-                        'An index is primarily used to improve:',
-                        ['Data retrieval speed', 'Table color', 'Password length', 'CPU instruction set'],
-                        'Data retrieval speed'),
-                       ('db-ind-02',
-                        'A common tree used for database indexing is:',
-                        ['B+ tree', 'AVL only', 'Expression tree only', 'Parse tree'],
-                        'B+ tree'),
-                       ('db-ind-03',
-                        'An index can add overhead to:',
-                        ['Insert/update operations', 'SELECT only', 'Display only', 'Compilation'],
-                        'Insert/update operations'),
-                       ('db-ind-04',
-                        'A clustered index affects the physical/logical ordering of:',
-                        ['Rows/data', 'Only SQL keywords', 'Only users', 'Only constraints'],
-                        'Rows/data')]},
- 'DAE': {'Differential Equations': [('dae-de-01',
-                                     'The order of a differential equation is the highest order of:',
-                                     ['Derivative present', 'Variable', 'Constant', 'Coefficient'],
-                                     'Derivative present'),
-                                    ('dae-de-02',
-                                     'A first-order differential equation contains a highest derivative of:',
-                                     ['First order', 'Second order', 'Third order', 'Zero only'],
-                                     'First order'),
-                                    ('dae-de-03',
-                                     'The general solution of a first-order ODE usually contains:',
-                                     ['One arbitrary constant',
-                                      'No constants',
-                                      'Two arbitrary constants always',
-                                      'Only variables'],
-                                     'One arbitrary constant'),
-                                    ('dae-de-04',
-                                     'An equation involving derivatives of a dependent variable is a:',
-                                     ['Differential equation', 'Algebraic identity', 'Matrix only', 'Sequence'],
-                                     'Differential equation')],
-         'Laplace Transform': [('dae-lap-01',
-                                'The Laplace transform is especially useful for solving:',
-                                ['Differential equations', 'Only matrices', 'Only geometry', 'Only sorting'],
-                                'Differential equations'),
-                               ('dae-lap-02',
-                                'The Laplace transform changes a function of time into a function of:',
-                                ['Complex frequency variable s', 'Only x', 'Only y', 'Only angle'],
-                                'Complex frequency variable s'),
-                               ('dae-lap-03',
-                                'The Laplace transform of 1 for t≥0 is:',
-                                ['1/s', 's', '0', 'e^s'],
-                                '1/s'),
-                               ('dae-lap-04',
-                                'Laplace methods are useful for incorporating:',
-                                ['Initial conditions',
-                                 'Only final conditions',
-                                 'Only boundary labels',
-                                 'Only graph colors'],
-                                'Initial conditions')],
-         'Fourier Series': [('dae-four-01',
-                             'A Fourier series represents a periodic function using:',
-                             ['Sines and cosines', 'Only polynomials', 'Only exponentials', 'Only matrices'],
-                             'Sines and cosines'),
-                            ('dae-four-02',
-                             'The constant term in a Fourier series represents the:',
-                             ['Average/DC component', 'Maximum frequency', 'Derivative', 'Error only'],
-                             'Average/DC component'),
-                            ('dae-four-03',
-                             'Fourier series are commonly used to analyze:',
-                             ['Periodic signals', 'Only databases', 'Only compilers', 'Only trees'],
-                             'Periodic signals'),
-                            ('dae-four-04',
-                             'The Fourier coefficients depend on:',
-                             ['Integrals over a period', 'Only one point', 'Only a constant', 'Only the final value'],
-                             'Integrals over a period')],
-         'Partial Derivatives': [('dae-pd-01',
-                                  'A partial derivative differentiates with respect to:',
-                                  ['One variable while holding others constant',
-                                   'All variables at once',
-                                   'No variable',
-                                   'Only constants'],
-                                  'One variable while holding others constant'),
-                                 ('dae-pd-02',
-                                  'For z=f(x,y), ∂z/∂x treats y as:',
-                                  ['Constant', 'Zero always', 'Infinite', 'A function of x always'],
-                                  'Constant'),
-                                 ('dae-pd-03',
-                                  'The symbol ∂ denotes a:',
-                                  ['Partial derivative', 'Summation', 'Integral', 'Limit'],
-                                  'Partial derivative'),
-                                 ('dae-pd-04',
-                                  'A function of two independent variables can have:',
-                                  ['Partial derivatives with respect to both',
-                                   'Only one derivative',
-                                   'No derivatives',
-                                   'Only a matrix'],
-                                  'Partial derivatives with respect to both')],
-         'Applications': [('dae-app-01',
-                           'Differential equations are used to model:',
-                           ['Rates of change', 'Only spelling', 'Only file formats', 'Only database keys'],
-                           'Rates of change'),
-                          ('dae-app-02',
-                           'An RC circuit can be modeled using:',
-                           ['A differential equation',
-                            'Only a sorting algorithm',
-                            'Only a pie chart',
-                            'Only a database'],
-                           'A differential equation'),
-                          ('dae-app-03',
-                           'A population growth model can use:',
-                           ['Differential equations', 'Only SQL', 'Only stacks', 'Only Fourier coefficients'],
-                           'Differential equations'),
-                          ('dae-app-04',
-                           'A solution to a differential equation should satisfy:',
-                           ['The original equation and relevant conditions',
-                            'Only a graph',
-                            'Only an initial guess',
-                            'Only the variable names'],
-                           'The original equation and relevant conditions')]},
- 'ASE': {'Software Engineering': [('ase-se-01',
-                                   'Software engineering is primarily concerned with:',
-                                   ['Systematic development of software',
-                                    'Only typing code',
-                                    'Only hardware design',
-                                    'Only networking'],
-                                   'Systematic development of software'),
-                                  ('ase-se-02',
-                                   'A software process model defines:',
-                                   ['Activities and their relationships',
-                                    'Only variable names',
-                                    'Only test data',
-                                    'Only database rows'],
-                                   'Activities and their relationships'),
-                                  ('ase-se-03',
-                                   'Software maintenance occurs:',
-                                   ['After deployment as needed',
-                                    'Only before coding',
-                                    'Only during requirements',
-                                    'Never'],
-                                   'After deployment as needed'),
-                                  ('ase-se-04',
-                                   'A key goal of software engineering is:',
-                                   ['Quality and maintainability',
-                                    'Maximum code length',
-                                    'No documentation',
-                                    'No testing'],
-                                   'Quality and maintainability')],
-         'SDLC': [('ase-sdlc-01',
-                   'SDLC stands for:',
-                   ['Software Development Life Cycle',
-                    'System Data Logic Cycle',
-                    'Software Design Link Code',
-                    'System Development Logic Class'],
-                   'Software Development Life Cycle'),
-                  ('ase-sdlc-02',
-                   'Which is commonly an early SDLC phase?',
-                   ['Requirements', 'Deployment only', 'Retirement only', 'Debugging only'],
-                   'Requirements'),
-                  ('ase-sdlc-03',
-                   'Testing is mainly used to:',
-                   ['Find defects and verify behavior', 'Write requirements', 'Replace users', 'Design logos'],
-                   'Find defects and verify behavior'),
-                  ('ase-sdlc-04',
-                   'Deployment means:',
-                   ['Making software available for use',
-                    'Deleting source code',
-                    'Writing only tests',
-                    'Collecting requirements'],
-                   'Making software available for use')],
-         'Requirements': [('ase-req-01',
-                           'A functional requirement describes:',
-                           ['What the system should do',
-                            'Only system color',
-                            'Only developer salary',
-                            'Only hardware brand'],
-                           'What the system should do'),
-                          ('ase-req-02',
-                           'A non-functional requirement describes:',
-                           ['Quality/constraint characteristics',
-                            'Only user names',
-                            'Only database rows',
-                            'Only algorithms'],
-                           'Quality/constraint characteristics'),
-                          ('ase-req-03',
-                           'Requirements should be:',
-                           ['Clear and verifiable', 'Ambiguous', 'Hidden', 'Contradictory'],
-                           'Clear and verifiable'),
-                          ('ase-req-04',
-                           'A use case typically describes interaction between:',
-                           ['Actor and system', 'Compiler and CPU', 'Database and printer', 'Keyboard and monitor'],
-                           'Actor and system')],
-         'Testing': [('ase-test-01',
-                      'Unit testing focuses on:',
-                      ['Individual components', 'The entire organization', 'Only UI colors', 'Only network cables'],
-                      'Individual components'),
-                     ('ase-test-02',
-                      'Integration testing checks:',
-                      ['Interactions between components', 'Only one variable', 'Only documentation', 'Only hardware'],
-                      'Interactions between components'),
-                     ('ase-test-03',
-                      'Regression testing checks that changes did not:',
-                      ['Break existing behavior', 'Improve code', 'Add features', 'Compile'],
-                      'Break existing behavior'),
-                     ('ase-test-04',
-                      'A test case normally includes inputs and:',
-                      ['Expected result', 'Only source code', 'Only screenshots', 'Only database schema'],
-                      'Expected result')],
-         'Agile': [('ase-ag-01',
-                    'Agile emphasizes:',
-                    ['Iterative delivery and feedback', 'One huge release only', 'No customer feedback', 'No testing'],
-                    'Iterative delivery and feedback'),
-                   ('ase-ag-02',
-                    'A Scrum sprint is a:',
-                    ['Time-boxed development iteration', 'Database table', 'Testing tool', 'Programming language'],
-                    'Time-boxed development iteration'),
-                   ('ase-ag-03',
-                    'A product backlog contains:',
-                    ['Prioritized work items', 'Only completed bugs', 'Only code binaries', 'Only user passwords'],
-                    'Prioritized work items'),
-                   ('ase-ag-04',
-                    'Daily Scrum is intended for:',
-                    ['Short team coordination', 'Long design documents', 'Customer billing', 'Database backups'],
-                    'Short team coordination')]},
- 'AI': {'AI Basics': [('ai-basic-01',
-                       'AI aims to build systems that can perform tasks requiring:',
-                       ['Intelligent behavior', 'Only arithmetic', 'Only storage', 'Only printing'],
-                       'Intelligent behavior'),
-                      ('ai-basic-02',
-                       'Which is an AI application?',
-                       ['Speech recognition', 'File renaming only', 'Keyboard lighting', 'Screen brightness'],
-                       'Speech recognition'),
-                      ('ai-basic-03',
-                       'A knowledge representation stores:',
-                       ['Information used for reasoning', 'Only images', 'Only passwords', 'Only source files'],
-                       'Information used for reasoning'),
-                      ('ai-basic-04',
-                       'Machine learning is a subset of:',
-                       ['Artificial Intelligence', 'Operating Systems', 'DBMS', 'Networking'],
-                       'Artificial Intelligence')],
-        'Search': [('ai-search-01',
-                    'BFS explores a graph using a:',
-                    ['Queue', 'Stack', 'Heap only', 'Database'],
-                    'Queue'),
-                   ('ai-search-02',
-                    'DFS explores using a:',
-                    ['Stack or recursion', 'Queue only', 'Hash table only', 'SQL'],
-                    'Stack or recursion'),
-                   ('ai-search-03',
-                    'A heuristic is used to:',
-                    ['Guide search toward promising states', 'Store passwords', 'Compile code', 'Encrypt disks'],
-                    'Guide search toward promising states'),
-                   ('ai-search-04',
-                    'A* search combines path cost with:',
-                    ['A heuristic estimate', 'Only depth', 'Only breadth', 'Only random choice'],
-                    'A heuristic estimate')],
-        'Machine Learning': [('ai-ml-01',
-                              'Supervised learning uses:',
-                              ['Labeled data', 'No data', 'Only rules', 'Only hardware'],
-                              'Labeled data'),
-                             ('ai-ml-02',
-                              'Unsupervised learning works with:',
-                              ['Unlabeled data', 'Only labeled outputs', 'Only rewards', 'Only SQL'],
-                              'Unlabeled data'),
-                             ('ai-ml-03',
-                              'Classification predicts:',
-                              ['Discrete classes', 'Only continuous values', 'Only database keys', 'Only text length'],
-                              'Discrete classes'),
-                             ('ai-ml-04',
-                              'Overfitting means a model:',
-                              ['Fits training data too closely and generalizes poorly',
-                               'Cannot learn training data',
-                               'Has no parameters',
-                               'Always underfits'],
-                              'Fits training data too closely and generalizes poorly')],
-        'Neural Networks': [('ai-nn-01',
-                             'A neuron computes a weighted sum followed by an:',
-                             ['Activation function', 'SQL query', 'Index', 'Exception'],
-                             'Activation function'),
-                            ('ai-nn-02',
-                             'Which activation is commonly used in hidden layers?',
-                             ['ReLU', 'SELECT', 'FIFO', 'BFS'],
-                             'ReLU'),
-                            ('ai-nn-03',
-                             'Backpropagation is used to:',
-                             ['Compute gradients for learning', 'Store datasets', 'Sort arrays', 'Build indexes'],
-                             'Compute gradients for learning'),
-                            ('ai-nn-04',
-                             'A neural network learns parameters by minimizing a:',
-                             ['Loss function', 'File size', 'CPU temperature', 'Screen resolution'],
-                             'Loss function')],
-        'Ethics': [('ai-eth-01',
-                    'AI bias can arise from:',
-                    ['Biased data or design', 'Only faster CPUs', 'Only larger screens', 'Only network speed'],
-                    'Biased data or design'),
-                   ('ai-eth-02',
-                    'Explainability concerns whether decisions can be:',
-                    ['Understood by humans', 'Stored on disk', 'Sorted quickly', 'Printed'],
-                    'Understood by humans'),
-                   ('ai-eth-03',
-                    'Privacy in AI concerns:',
-                    ['Responsible handling of personal data',
-                     'Only model size',
-                     'Only code formatting',
-                     'Only CPU usage'],
-                    'Responsible handling of personal data'),
-                   ('ai-eth-04',
-                    'Fairness aims to reduce:',
-                    ['Unjustified disparities', 'All model errors to zero', 'All data storage', 'All computation'],
-                    'Unjustified disparities')]},
- 'C++': {'Syntax & STL': [('cpp-syn-01',
-                           'Which header provides std::vector?',
-                           ['<vector>', '<arraylist>', '<listvector>', '<container>'],
-                           '<vector>'),
-                          ('cpp-syn-02', 'Which symbol ends a typical C++ statement?', [';', ';', '.', ':'], ';'),
-                          ('cpp-syn-03',
-                           'Which keyword declares a constant variable?',
-                           ['const', 'constant', 'fixed', 'readonly'],
-                           'const'),
-                          ('cpp-syn-04',
-                           'Which standard namespace commonly contains STL types?',
-                           ['std', 'cpp', 'stl', 'system'],
-                           'std')],
-         'OOP': [('cpp-oop-01',
-                  'A class is a blueprint for:',
-                  ['Objects', 'Loops', 'Files', 'Threads only'],
-                  'Objects'),
-                 ('cpp-oop-02',
-                  'Which feature allows a derived class to reuse a base class?',
-                  ['Inheritance', 'Compilation', 'Iteration', 'Indexing'],
-                  'Inheritance'),
-                 ('cpp-oop-03',
-                  'A constructor is called when an object is:',
-                  ['Created', 'Deleted only', 'Printed', 'Sorted'],
-                  'Created'),
-                 ('cpp-oop-04',
-                  'Which concept allows the same interface to have different implementations?',
-                  ['Polymorphism', 'Hashing', 'Caching', 'Parsing'],
-                  'Polymorphism')],
-         'Pointers': [('cpp-ptr-01',
-                       'A pointer stores:',
-                       ['An address', 'A class only', 'A file', 'A loop count only'],
-                       'An address'),
-                      ('cpp-ptr-02', 'Which operator obtains the address of a variable?', ['&', '*', '->', '::'], '&'),
-                      ('cpp-ptr-03', 'Which operator dereferences a pointer?', ['*', '&', '->>', '%'], '*'),
-                      ('cpp-ptr-04',
-                       'A null pointer represents:',
-                       ['No valid object address', 'An integer always', 'A file', 'A reference to all objects'],
-                       'No valid object address')],
-         'Templates': [('cpp-temp-01',
-                        'Templates support:',
-                        ['Generic programming', 'Only graphics', 'Only networking', 'Only SQL'],
-                        'Generic programming'),
-                       ('cpp-temp-02',
-                        'Which keyword begins a template declaration?',
-                        ['template', 'generic', 'typenameonly', 'classonly'],
-                        'template'),
-                       ('cpp-temp-03',
-                        'A function template can work with:',
-                        ['Multiple data types', 'Only int', 'Only string', 'Only pointers'],
-                        'Multiple data types'),
-                       ('cpp-temp-04',
-                        'In a template, typename is commonly used to declare a:',
-                        ['Type parameter', 'Loop', 'Object instance', 'File'],
-                        'Type parameter')],
-         'STL Algorithms': [('cpp-stl-01',
-                             'Which STL algorithm sorts a range?',
-                             ['std::sort', 'std::order', 'std::arrange', 'std::sequence'],
-                             'std::sort'),
-                            ('cpp-stl-02',
-                             'Which container provides fast indexed access?',
-                             ['vector', 'list', 'set only', 'map only'],
-                             'vector'),
-                            ('cpp-stl-03',
-                             'Which container stores unique sorted keys?',
-                             ['set', 'vector', 'queue', 'stack'],
-                             'set'),
-                            ('cpp-stl-04',
-                             'Which container stores key-value pairs?',
-                             ['map', 'vector', 'stack', 'queue'],
-                             'map')]},
- 'P&S': {'Probability': [('ps-prob-01', 'Probability of an impossible event is:', ['0', '1', '-1', '0.5'], '0'),
-                         ('ps-prob-02', 'Probability of a certain event is:', ['0', '1', '-1', '0.5'], '1'),
-                         ('ps-prob-03',
-                          'For equally likely outcomes, probability is:',
-                          ['Favorable outcomes / total outcomes',
-                           'Total / favorable',
-                           'Favorable + total',
-                           'Difference'],
-                          'Favorable outcomes / total outcomes'),
-                         ('ps-prob-04',
-                          'The probability of an event and its complement sums to:',
-                          ['1', '0', '2', '0.5'],
-                          '1')],
-         'Random Variables': [('ps-rv-01',
-                               'A random variable assigns a numerical value to:',
-                               ['Outcomes of a random experiment',
-                                'Only constants',
-                                'Only equations',
-                                'Only databases'],
-                               'Outcomes of a random experiment'),
-                              ('ps-rv-02',
-                               'A discrete random variable has values that are:',
-                               ['Countable', 'Only continuous', 'Only negative', 'Always infinite decimals'],
-                               'Countable'),
-                              ('ps-rv-03',
-                               'A continuous random variable can take values in:',
-                               ['An interval', 'Only integers', 'Only zero', 'Only categories'],
-                               'An interval'),
-                              ('ps-rv-04',
-                               'The expected value represents the:',
-                               ['Mean/long-run average', 'Maximum only', 'Minimum only', 'Variance only'],
-                               'Mean/long-run average')],
-         'Distributions': [('ps-dist-01',
-                            'A Bernoulli distribution models:',
-                            ['One trial with two outcomes',
-                             'Only continuous data',
-                             'Only three outcomes',
-                             'A time series'],
-                            'One trial with two outcomes'),
-                           ('ps-dist-02',
-                            'The binomial distribution models the number of successes in:',
-                            ['Fixed independent Bernoulli trials',
-                             'Any continuous interval',
-                             'One deterministic trial',
-                             'Only normal data'],
-                            'Fixed independent Bernoulli trials'),
-                           ('ps-dist-03',
-                            'The normal distribution is:',
-                            ['Continuous and bell-shaped', 'Discrete and rectangular', 'Always skewed', 'Only uniform'],
-                            'Continuous and bell-shaped'),
-                           ('ps-dist-04',
-                            'The Poisson distribution is often used for:',
-                            ['Counts of events in a fixed interval',
-                             'Only heights',
-                             'Only percentages',
-                             'Only continuous temperatures'],
-                            'Counts of events in a fixed interval')],
-         'Statistics': [('ps-stat-01',
-                         'The mean is calculated by:',
-                         ['Sum of values / number of values',
-                          'Largest - smallest',
-                          'Middle value only',
-                          'Product of values'],
-                         'Sum of values / number of values'),
-                        ('ps-stat-02',
-                         'The median is the:',
-                         ['Middle ordered value', 'Most frequent value', 'Average of extremes', 'Largest value'],
-                         'Middle ordered value'),
-                        ('ps-stat-03',
-                         'The mode is the:',
-                         ['Most frequent value', 'Middle value', 'Average', 'Range'],
-                         'Most frequent value'),
-                        ('ps-stat-04',
-                         'Variance measures:',
-                         ['Spread around the mean', 'Only central location', 'Only sample size', 'Only maximum'],
-                         'Spread around the mean')],
-         'Hypothesis Testing': [('ps-ht-01',
-                                 'The null hypothesis is commonly denoted:',
-                                 ['H0', 'H1 only', 'Ha only', 'Hx'],
-                                 'H0'),
-                                ('ps-ht-02',
-                                 'A p-value is used to assess evidence against:',
-                                 ['The null hypothesis',
-                                  'The sample mean only',
-                                  'The population size',
-                                  'The confidence interval only'],
-                                 'The null hypothesis'),
-                                ('ps-ht-03',
-                                 'A significance level is often denoted by:',
-                                 ['α', 'β only', 'μ', 'σ only'],
-                                 'α'),
-                                ('ps-ht-04',
-                                 'Rejecting H0 when it is true is a:',
-                                 ['Type I error', 'Type II error', 'Sampling mean', 'Confidence level'],
-                                 'Type I error')]},
- 'ADSAA': {'Advanced Data Structures': [('adsaa-ads-01',
-                                         'Which structure is commonly used for efficient range queries?',
-                                         ['Segment tree', 'Stack', 'Queue', 'Plain array only'],
-                                         'Segment tree'),
-                                        ('adsaa-ads-02',
-                                         'A trie is especially useful for:',
-                                         ['Prefix/string queries',
-                                          'Matrix multiplication',
-                                          'CPU scheduling',
-                                          'File compression only'],
-                                         'Prefix/string queries'),
-                                        ('adsaa-ads-03',
-                                         'A heap supports efficient:',
-                                         ['Priority access',
-                                          'Random graph traversal',
-                                          'SQL joins',
-                                          'String matching only'],
-                                         'Priority access'),
-                                        ('adsaa-ads-04',
-                                         'A disjoint-set structure supports:',
-                                         ['Union and find operations',
-                                          'Push and pop only',
-                                          'SQL SELECT',
-                                          'Tree traversal only'],
-                                         'Union and find operations')],
-           'Algorithms': [('adsaa-alg-01',
-                           'Binary search requires the search data to be:',
-                           ['Sorted', 'Encrypted', 'Hashed always', 'Random'],
-                           'Sorted'),
-                          ('adsaa-alg-02',
-                           'Merge sort has worst-case time complexity:',
-                           ['O(n log n)', 'O(n)', 'O(log n)', 'O(n²)'],
-                           'O(n log n)'),
-                          ('adsaa-alg-03',
-                           "Dijkstra's algorithm finds shortest paths with:",
-                           ['Non-negative edge weights', 'Only negative weights', 'No weights', 'Only trees'],
-                           'Non-negative edge weights'),
-                          ('adsaa-alg-04',
-                           'Topological sorting applies to:',
-                           ['Directed acyclic graphs', 'Undirected complete graphs only', 'Heaps', 'Arrays only'],
-                           'Directed acyclic graphs')],
-           'Complexity': [('adsaa-com-01',
-                           'O(1) means:',
-                           ['Constant time', 'Linear time', 'Logarithmic time', 'Quadratic time'],
-                           'Constant time'),
-                          ('adsaa-com-02',
-                           'Which grows fastest asymptotically?',
-                           ['O(n²)', 'O(n log n)', 'O(n)', 'O(log n)'],
-                           'O(n²)'),
-                          ('adsaa-com-03',
-                           'Space complexity measures:',
-                           ['Additional memory usage as input grows',
-                            'CPU frequency',
-                            'Network bandwidth only',
-                            'Number of files'],
-                           'Additional memory usage as input grows'),
-                          ('adsaa-com-04',
-                           'An algorithm with O(log n) usually reduces the problem by a:',
-                           ['Constant factor or multiplicative ratio',
-                            'One element only always',
-                            'Random amount',
-                            'Fixed output'],
-                           'Constant factor or multiplicative ratio')],
-           'Dynamic Programming': [('adsaa-dp-01',
-                                    'Dynamic programming is useful when subproblems:',
-                                    ['Overlap and optimal substructure exists',
-                                     'Are always unrelated',
-                                     'Have no solutions',
-                                     'Are only strings'],
-                                    'Overlap and optimal substructure exists'),
-                                   ('adsaa-dp-02',
-                                    'Memoization stores results of:',
-                                    ['Previously solved subproblems',
-                                     'All input files',
-                                     'Only final answers',
-                                     'Only graph edges'],
-                                    'Previously solved subproblems'),
-                                   ('adsaa-dp-03',
-                                    'Tabulation usually builds a solution:',
-                                    ['Bottom-up', 'Only randomly', 'Only top-down', 'Without subproblems'],
-                                    'Bottom-up'),
-                                   ('adsaa-dp-04',
-                                    'The Fibonacci sequence is a common example for:',
-                                    ['Dynamic programming', 'SQL normalization', 'Cache mapping only', 'BFS only'],
-                                    'Dynamic programming')],
-           'Greedy Algorithms': [('adsaa-gr-01',
-                                  'A greedy algorithm chooses:',
-                                  ['The locally best option at each step',
-                                   'All options exhaustively',
-                                   'Only random options',
-                                   'Only the final option'],
-                                  'The locally best option at each step'),
-                                 ('adsaa-gr-02',
-                                  "Kruskal's algorithm builds a:",
-                                  ['Minimum spanning tree',
-                                   'Shortest path tree from one source',
-                                   'Binary search tree',
-                                   'Trie'],
-                                  'Minimum spanning tree'),
-                                 ('adsaa-gr-03',
-                                  "Prim's algorithm also finds a:",
-                                  ['Minimum spanning tree', 'Maximum flow always', 'Topological order', 'Hash table'],
-                                  'Minimum spanning tree'),
-                                 ('adsaa-gr-04',
-                                  'Greedy algorithms are correct when the problem has suitable:',
-                                  ['Greedy-choice property and optimal substructure',
-                                   'Only recursion',
-                                   'Only arrays',
-                                   'Only sorting'],
-                                  'Greedy-choice property and optimal substructure')]}}
-
-PUZZLES = [
-    {"id":"pz-01","title":"Logic","question":"I am an odd number. Remove one letter and I become even. What number am I?","answer":"seven"},
-    {"id":"pz-02","title":"Sequence","question":"What comes next: 2, 4, 8, 16, ?","answer":"32"},
-    {"id":"pz-03","title":"Riddle","question":"The more you take, the more you leave behind. What are they?","answer":"footsteps"},
-    {"id":"pz-04","title":"Sequence","question":"What comes next: 3, 6, 12, 24, ?","answer":"48"},
-    {"id":"pz-05","title":"Logic","question":"If all roses are flowers and some flowers fade, can we conclude all roses fade?","answer":"no"},
-    {"id":"pz-06","title":"Number","question":"What is the smallest prime number?","answer":"2"},
-    {"id":"pz-07","title":"Riddle","question":"What has keys but cannot open locks?","answer":"keyboard"},
-    {"id":"pz-08","title":"Logic","question":"A clock shows 3:00. What is the angle between the hands?","answer":"90"},
-    {"id":"pz-09","title":"Sequence","question":"What comes next: 1, 1, 2, 3, 5, ?","answer":"8"},
-    {"id":"pz-10","title":"Riddle","question":"What gets wetter the more it dries?","answer":"towel"},
-    {"id":"pz-11","title":"Logic","question":"How many sides does a hexagon have?","answer":"6"},
-    {"id":"pz-12","title":"Number","question":"What is 15% of 200?","answer":"30"},
-    {"id":"pz-13","title":"Riddle","question":"What has a face and two hands but no arms or legs?","answer":"clock"},
-    {"id":"pz-14","title":"Sequence","question":"What comes next: 5, 10, 20, 40, ?","answer":"80"},
-    {"id":"pz-15","title":"Logic","question":"If today is Monday, what day is 10 days later?","answer":"thursday"},
-    {"id":"pz-16","title":"Riddle","question":"What can travel around the world while staying in one corner?","answer":"stamp"},
-    {"id":"pz-17","title":"Number","question":"What is the square of 12?","answer":"144"},
-    {"id":"pz-18","title":"Logic","question":"How many months have 28 days?","answer":"12"},
-    {"id":"pz-19","title":"Riddle","question":"What has one eye but cannot see?","answer":"needle"},
-    {"id":"pz-20","title":"Sequence","question":"What comes next: 10, 20, 30, 40, ?","answer":"50"},
-]
-
-DIFFICULTY_ORDER = {"Easy": 0, "Medium": 1, "Hard": 2}
-
-# Demo credentials. For deployment, set DEMO_USERNAME / DEMO_PASSWORD
-# in Streamlit secrets. The fallback is only for local demonstration.
-try:
-    DEMO_USERNAME = st.secrets.get("DEMO_USERNAME", "demo")
-    DEMO_PASSWORD = st.secrets.get("DEMO_PASSWORD", "password")
-except Exception:
-    DEMO_USERNAME = "demo"
-    DEMO_PASSWORD = "password"
-
-# ============================================================
-# DATABASE
-# ============================================================
+# ----------------------------- DB -----------------------------
 def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.execute("PRAGMA foreign_keys = ON")
-    return conn
+    return sqlite3.connect(DB_FILE, check_same_thread=False)
 
 
 def init_db():
     conn = get_conn()
-    conn.executescript("""
-    CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL,
-        created_at TEXT NOT NULL
-    );
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS users(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT NOT NULL,
+            password_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
 
-    CREATE TABLE IF NOT EXISTS preferences (
-        user_id INTEGER PRIMARY KEY,
-        subjects_json TEXT NOT NULL,
-        exam_date TEXT,
-        updated_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS subjects(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            name TEXT NOT NULL,
+            UNIQUE(user_id,name)
+        );
 
-    CREATE TABLE IF NOT EXISTS study_sessions (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        subject TEXT NOT NULL,
-        topic TEXT NOT NULL,
-        minutes INTEGER NOT NULL,
-        completed INTEGER NOT NULL,
-        started_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS exams(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            exam_date TEXT NOT NULL,
+            exam_time TEXT NOT NULL
+        );
 
-    CREATE TABLE IF NOT EXISTS quiz_attempts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        subject TEXT NOT NULL,
-        topic TEXT NOT NULL,
-        question_id TEXT NOT NULL,
-        correct INTEGER NOT NULL,
-        score_percent REAL NOT NULL,
-        difficulty TEXT NOT NULL,
-        study_minutes INTEGER NOT NULL,
-        attempted_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS study_sessions(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            planned_minutes INTEGER NOT NULL,
+            actual_minutes INTEGER NOT NULL,
+            completed INTEGER NOT NULL,
+            started_at TEXT NOT NULL,
+            ended_at TEXT
+        );
 
-    CREATE TABLE IF NOT EXISTS coding_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        language TEXT NOT NULL,
-        attempted INTEGER NOT NULL,
-        solved INTEGER NOT NULL,
-        minutes INTEGER NOT NULL,
-        difficulty TEXT NOT NULL,
-        logged_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS quiz_questions(
+            id TEXT PRIMARY KEY,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            question TEXT NOT NULL,
+            options_json TEXT NOT NULL,
+            answer TEXT NOT NULL,
+            difficulty TEXT NOT NULL
+        );
 
-    CREATE TABLE IF NOT EXISTS stress_logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        level INTEGER NOT NULL,
-        note TEXT,
-        logged_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS quiz_attempts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            question_id TEXT NOT NULL,
+            selected_answer TEXT NOT NULL,
+            correct INTEGER NOT NULL,
+            score REAL NOT NULL,
+            attempted_at TEXT NOT NULL
+        );
 
-    CREATE TABLE IF NOT EXISTS puzzle_attempts (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        puzzle_id TEXT NOT NULL,
-        solved INTEGER NOT NULL,
-        attempted_at TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
+        CREATE TABLE IF NOT EXISTS coding_logs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            coding_user_id TEXT NOT NULL,
+            log_date TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            language TEXT NOT NULL,
+            attempted INTEGER NOT NULL,
+            solved INTEGER NOT NULL,
+            easy INTEGER NOT NULL,
+            medium INTEGER NOT NULL,
+            hard INTEGER NOT NULL,
+            minutes INTEGER NOT NULL
+        );
 
-    CREATE TABLE IF NOT EXISTS subject_slots (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        day TEXT NOT NULL,
-        time_slot TEXT NOT NULL,
-        subject TEXT NOT NULL,
-        FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
-    );
-    """)
+        CREATE TABLE IF NOT EXISTS coding_snapshots(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            coding_user_id TEXT NOT NULL,
+            platform TEXT NOT NULL,
+            snapshot_date TEXT NOT NULL,
+            solved_total INTEGER NOT NULL DEFAULT 0,
+            attempted_total INTEGER NOT NULL DEFAULT 0,
+            language_json TEXT NOT NULL DEFAULT '{}',
+            easy_total INTEGER NOT NULL DEFAULT 0,
+            medium_total INTEGER NOT NULL DEFAULT 0,
+            hard_total INTEGER NOT NULL DEFAULT 0,
+            fetched_at TEXT NOT NULL,
+            UNIQUE(user_id, coding_user_id, platform, snapshot_date)
+        );
+
+        CREATE TABLE IF NOT EXISTS stress_logs(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            level INTEGER NOT NULL,
+            note TEXT,
+            logged_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS puzzle_attempts(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            puzzle_id TEXT NOT NULL,
+            puzzle_type TEXT NOT NULL,
+            score REAL NOT NULL,
+            played_at TEXT NOT NULL,
+            UNIQUE(user_id,puzzle_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS tasks(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            task_date TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            start_time TEXT NOT NULL,
+            duration INTEGER NOT NULL,
+            priority TEXT NOT NULL,
+            completed INTEGER NOT NULL DEFAULT 0
+        );
+
+        CREATE TABLE IF NOT EXISTS topics(
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            subject TEXT NOT NULL,
+            topic TEXT NOT NULL,
+            UNIQUE(user_id,subject,topic)
+        );
+
+        CREATE TABLE IF NOT EXISTS profiles(
+            user_id INTEGER PRIMARY KEY,
+            coding_user_id TEXT DEFAULT '',
+            coding_platform TEXT DEFAULT 'Manual',
+            semester TEXT DEFAULT ''
+        );
+        """
+    )
     conn.commit()
     conn.close()
 
 
+init_db()
+
+# ----------------------------- Helpers -----------------------------
 def hash_password(password):
-    return hashlib.sha256(password.encode("utf-8")).hexdigest()
+    salt = secrets.token_hex(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode(), salt.encode(), 120_000
+    ).hex()
+    return f"{salt}${digest}"
+
+
+def verify_password(password, stored):
+    try:
+        salt, digest = stored.split("$", 1)
+        check = hashlib.pbkdf2_hmac(
+            "sha256", password.encode(), salt.encode(), 120_000
+        ).hex()
+        return secrets.compare_digest(check, digest)
+    except Exception:
+        return False
+
+
+def create_user(username, name, email, password):
+    conn = get_conn()
+    try:
+        conn.execute(
+            "INSERT INTO users(username,name,email,password_hash,created_at) VALUES(?,?,?,?,?)",
+            (
+                username.strip(),
+                name.strip(),
+                email.strip().lower(),
+                hash_password(password),
+                datetime.now().isoformat(timespec="seconds"),
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT id FROM users WHERE username=?", (username.strip(),)
+        ).fetchone()
+        user_id = row[0]
+        conn.execute("INSERT INTO profiles(user_id) VALUES(?)", (user_id,))
+        conn.commit()
+        return True, "Account created."
+    except sqlite3.IntegrityError:
+        return False, "Username already exists."
+    finally:
+        conn.close()
 
 
 def authenticate(username, password):
-    if username == DEMO_USERNAME and password == DEMO_PASSWORD:
-        conn = get_conn()
-        row = conn.execute(
-            "SELECT id FROM users WHERE username = ?",
-            (username,),
-        ).fetchone()
-        if row:
-            user_id = row[0]
-        else:
-            cur = conn.execute(
-                "INSERT INTO users(username,password_hash,created_at) VALUES(?,?,?)",
-                (username, hash_password(password), now().isoformat(timespec="seconds")),
-            )
-            user_id = cur.lastrowid
-            conn.execute(
-                "INSERT INTO preferences(user_id,subjects_json,exam_date,updated_at) VALUES(?,?,?,?)",
-                (user_id, json.dumps(ALL_SUBJECTS), str(dt.date.today() + dt.timedelta(days=30)), now().isoformat()),
-            )
-            conn.commit()
-        conn.close()
-        return user_id
-
     conn = get_conn()
     row = conn.execute(
-        "SELECT id FROM users WHERE username=? AND password_hash=?",
-        (username.strip(), hash_password(password)),
+        "SELECT id,name,email,password_hash FROM users WHERE username=?",
+        (username.strip(),),
     ).fetchone()
     conn.close()
-    return row[0] if row else None
+    if row and verify_password(password, row[3]):
+        return row
+    return None
 
 
-def now():
-    return dt.datetime.now()
+def user_subjects(user_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT name FROM subjects WHERE user_id=? ORDER BY name", (user_id,)
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 
-def load_preferences(user_id):
+def add_subject(user_id, subject):
+    if not subject.strip():
+        return
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO subjects(user_id,name) VALUES(?,?)",
+        (user_id, subject.strip()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def remove_subject(user_id, subject):
+    conn = get_conn()
+    conn.execute(
+        "DELETE FROM subjects WHERE user_id=? AND name=?", (user_id, subject)
+    )
+    conn.execute("DELETE FROM topics WHERE user_id=? AND subject=?", (user_id, subject))
+    conn.commit()
+    conn.close()
+
+
+def user_topics(user_id, subject):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT topic FROM topics WHERE user_id=? AND subject=? ORDER BY topic",
+        (user_id, subject),
+    ).fetchall()
+    conn.close()
+    return [r[0] for r in rows]
+
+
+def add_topic(user_id, subject, topic):
+    if not topic.strip():
+        return
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO topics(user_id,subject,topic) VALUES(?,?,?)",
+        (user_id, subject, topic.strip()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def save_profile(user_id, coding_id, platform, semester):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO profiles(user_id,coding_user_id,coding_platform,semester) "
+        "VALUES(?,?,?,?) ON CONFLICT(user_id) DO UPDATE SET "
+        "coding_user_id=excluded.coding_user_id,coding_platform=excluded.coding_platform,"
+        "semester=excluded.semester",
+        (user_id, coding_id, platform, semester),
+    )
+    conn.commit()
+    conn.close()
+
+
+def profile(user_id):
     conn = get_conn()
     row = conn.execute(
-        "SELECT subjects_json, exam_date FROM preferences WHERE user_id=?",
+        "SELECT coding_user_id,coding_platform,semester FROM profiles WHERE user_id=?",
         (user_id,),
     ).fetchone()
     conn.close()
-    if not row:
-        return ALL_SUBJECTS[:], str(dt.date.today() + dt.timedelta(days=30))
-    try:
-        subjects = json.loads(row[0])
-    except Exception:
-        subjects = ALL_SUBJECTS[:]
-    return subjects or ALL_SUBJECTS[:], row[1]
+    return row or ("", "Manual", "")
 
 
-def save_preferences(user_id, subjects, exam_date):
+def save_exam(user_id, subject, exam_date, exam_time):
     conn = get_conn()
     conn.execute(
-        """
-        INSERT INTO preferences(user_id,subjects_json,exam_date,updated_at)
-        VALUES(?,?,?,?)
-        ON CONFLICT(user_id) DO UPDATE SET
-            subjects_json=excluded.subjects_json,
-            exam_date=excluded.exam_date,
-            updated_at=excluded.updated_at
-        """,
-        (user_id, json.dumps(subjects), exam_date, now().isoformat(timespec="seconds")),
+        "INSERT INTO exams(user_id,subject,exam_date,exam_time) VALUES(?,?,?,?)",
+        (user_id, subject, str(exam_date), str(exam_time)),
     )
     conn.commit()
     conn.close()
 
 
-def save_study(user_id, subject, topic, minutes, completed):
+def delete_exam(user_id, exam_id):
     conn = get_conn()
-    conn.execute(
-        """INSERT INTO study_sessions
-        (user_id,subject,topic,minutes,completed,started_at)
-        VALUES(?,?,?,?,?,?)""",
-        (user_id, subject, topic, int(minutes), int(completed), now().isoformat(timespec="seconds")),
-    )
+    conn.execute("DELETE FROM exams WHERE id=? AND user_id=?", (exam_id, user_id))
     conn.commit()
     conn.close()
 
 
-def save_quiz_rows(user_id, rows):
-    conn = get_conn()
-    conn.executemany(
-        """INSERT INTO quiz_attempts
-        (user_id,subject,topic,question_id,correct,score_percent,
-         difficulty,study_minutes,attempted_at)
-        VALUES(?,?,?,?,?,?,?,?,?)""",
-        rows,
-    )
-    conn.commit()
-    conn.close()
-
-
-def save_coding(user_id, language, attempted, solved, minutes, difficulty):
-    conn = get_conn()
-    conn.execute(
-        """INSERT INTO coding_logs
-        (user_id,language,attempted,solved,minutes,difficulty,logged_at)
-        VALUES(?,?,?,?,?,?,?)""",
-        (user_id, language, int(attempted), int(solved), int(minutes), difficulty,
-         now().isoformat(timespec="seconds")),
-    )
-    conn.commit()
-    conn.close()
-
-
-def save_stress(user_id, level, note):
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO stress_logs(user_id,level,note,logged_at) VALUES(?,?,?,?)",
-        (user_id, int(level), note, now().isoformat(timespec="seconds")),
-    )
-    conn.commit()
-    conn.close()
-
-
-def save_puzzle(user_id, puzzle_id, solved):
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO puzzle_attempts(user_id,puzzle_id,solved,attempted_at) VALUES(?,?,?,?)",
-        (user_id, puzzle_id, int(solved), now().isoformat(timespec="seconds")),
-    )
-    conn.commit()
-    conn.close()
-
-
-def save_slot(user_id, day, time_slot, subject):
-    conn = get_conn()
-    conn.execute(
-        "INSERT INTO subject_slots(user_id,day,time_slot,subject) VALUES(?,?,?,?)",
-        (user_id, day, time_slot, subject),
-    )
-    conn.commit()
-    conn.close()
-
-
-def slots_df():
-    return query_df(
-        st.session_state.user_id,
-        "subject_slots",
-        "day,time_slot,subject",
-    )
-
-
-def query_df(user_id, table, columns):
+def exams_df(user_id):
     conn = get_conn()
     df = pd.read_sql_query(
-        f"SELECT {columns} FROM {table} WHERE user_id=? ORDER BY rowid DESC".format(
-            columns=columns, table=table
-        ),
+        "SELECT id,subject,exam_date,exam_time FROM exams "
+        "WHERE user_id=? ORDER BY exam_date,exam_time",
         conn,
         params=(user_id,),
     )
@@ -1447,652 +381,1178 @@ def query_df(user_id, table, columns):
     return df
 
 
-def quiz_df():
-    return query_df(
-        st.session_state.user_id,
-        "quiz_attempts",
-        "subject,topic,question_id,correct,score_percent,difficulty,study_minutes,attempted_at",
+def save_study(user_id, subject, topic, planned, actual, completed, started, ended):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO study_sessions(user_id,subject,topic,planned_minutes,actual_minutes,"
+        "completed,started_at,ended_at) VALUES(?,?,?,?,?,?,?,?)",
+        (user_id, subject, topic, planned, actual, int(completed), started, ended),
     )
+    conn.commit()
+    conn.close()
 
 
-def study_df():
-    return query_df(
-        st.session_state.user_id,
-        "study_sessions",
-        "subject,topic,minutes,completed,started_at",
+def study_df(user_id):
+    conn = get_conn()
+    df = pd.read_sql_query(
+        "SELECT * FROM study_sessions WHERE user_id=? ORDER BY started_at DESC",
+        conn,
+        params=(user_id,),
     )
+    conn.close()
+    return df
 
 
-def coding_df():
-    return query_df(
-        st.session_state.user_id,
-        "coding_logs",
-        "language,attempted,solved,minutes,difficulty,logged_at",
+def save_quiz_attempt(user_id, subject, topic, qid, selected, correct, score):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO quiz_attempts(user_id,subject,topic,question_id,selected_answer,"
+        "correct,score,attempted_at) VALUES(?,?,?,?,?,?,?,?)",
+        (
+            user_id,
+            subject,
+            topic,
+            qid,
+            selected,
+            int(correct),
+            float(score),
+            datetime.now().isoformat(timespec="seconds"),
+        ),
     )
+    conn.commit()
+    conn.close()
 
 
-def stress_df():
-    return query_df(
-        st.session_state.user_id,
-        "stress_logs",
-        "level,note,logged_at",
+def quiz_df(user_id):
+    conn = get_conn()
+    df = pd.read_sql_query(
+        "SELECT * FROM quiz_attempts WHERE user_id=? ORDER BY attempted_at DESC",
+        conn,
+        params=(user_id,),
     )
+    conn.close()
+    return df
 
 
-def puzzle_df():
-    return query_df(
-        st.session_state.user_id,
-        "puzzle_attempts",
-        "puzzle_id,solved,attempted_at",
+def used_question_ids(user_id, subject, topic):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT DISTINCT question_id FROM quiz_attempts "
+        "WHERE user_id=? AND subject=? AND topic=?",
+        (user_id, subject, topic),
+    ).fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+
+def save_coding_snapshot(user_id, coding_user_id, platform, snapshot_date,
+                         solved_total, attempted_total, language_stats,
+                         easy_total=0, medium_total=0, hard_total=0):
+    conn = get_conn()
+    conn.execute(
+        """
+        INSERT INTO coding_snapshots(
+            user_id,coding_user_id,platform,snapshot_date,
+            solved_total,attempted_total,language_json,
+            easy_total,medium_total,hard_total,fetched_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(user_id,coding_user_id,platform,snapshot_date)
+        DO UPDATE SET
+            solved_total=excluded.solved_total,
+            attempted_total=excluded.attempted_total,
+            language_json=excluded.language_json,
+            easy_total=excluded.easy_total,
+            medium_total=excluded.medium_total,
+            hard_total=excluded.hard_total,
+            fetched_at=excluded.fetched_at
+        """,
+        (
+            user_id, coding_user_id, platform, str(snapshot_date),
+            int(solved_total), int(attempted_total), json.dumps(language_stats),
+            int(easy_total), int(medium_total), int(hard_total),
+            datetime.now().isoformat(timespec="seconds"),
+        ),
     )
+    conn.commit()
+    conn.close()
 
 
-def used_question_ids(subject, topic):
-    df = quiz_df()
+def coding_snapshots_df(user_id):
+    conn = get_conn()
+    df = pd.read_sql_query(
+        """
+        SELECT * FROM coding_snapshots
+        WHERE user_id=?
+        ORDER BY snapshot_date ASC
+        """,
+        conn,
+        params=(user_id,),
+    )
+    conn.close()
+    return df
+
+
+def coding_current_totals(user_id):
+    df = coding_snapshots_df(user_id)
     if df.empty:
-        return set()
-    return set(
-        df[(df["subject"] == subject) & (df["topic"] == topic)]["question_id"].astype(str)
-    )
+        return {
+            "attempted": 0, "solved": 0, "easy": 0,
+            "medium": 0, "hard": 0, "platform": "", "coding_user_id": ""
+        }
+    latest = df.iloc[-1]
+    return {
+        "attempted": int(latest["attempted_total"]),
+        "solved": int(latest["solved_total"]),
+        "easy": int(latest["easy_total"]),
+        "medium": int(latest["medium_total"]),
+        "hard": int(latest["hard_total"]),
+        "platform": latest["platform"],
+        "coding_user_id": latest["coding_user_id"],
+    }
 
 
-def used_puzzle_ids():
-    df = puzzle_df()
-    if df.empty:
-        return set()
-    return set(df["puzzle_id"].astype(str))
+def coding_df(user_id):
+    """
+    Return activity changes between automatic snapshots.
+    No program counts are entered manually by the student.
+    """
+    snapshots = coding_snapshots_df(user_id)
+    if snapshots.empty:
+        return pd.DataFrame(
+            columns=[
+                "log_date", "platform", "language", "attempted",
+                "solved", "minutes", "easy", "medium", "hard"
+            ]
+        )
 
+    rows = []
+    previous = None
 
-# ============================================================
-# QUESTION BANK PREPARATION
-# ============================================================
-def prepared_bank():
-    result = {}
-    for subject, topics in QUESTION_BANK.items():
-        result[subject] = {}
-        for topic, items in topics.items():
-            result[subject][topic] = []
-            n = len(items)
-            for i, item in enumerate(items):
-                difficulty = "Easy" if i == 0 else ("Hard" if i == n - 1 else "Medium")
-                result[subject][topic].append({
-                    "id": item[0],
-                    "q": item[1],
-                    "options": item[2],
-                    "answer": item[3],
-                    "difficulty": difficulty,
+    for _, row in snapshots.iterrows():
+        current_languages = json.loads(row["language_json"] or "{}")
+        previous_languages = json.loads(previous["language_json"] or "{}") if previous is not None else {}
+
+        if previous is None:
+            # First sync is a baseline. Do not pretend all historical problems
+            # happened today.
+            solved_delta = 0
+            attempted_delta = 0
+            easy_delta = medium_delta = hard_delta = 0
+        else:
+            solved_delta = max(0, int(row["solved_total"]) - int(previous["solved_total"]))
+            attempted_delta = max(0, int(row["attempted_total"]) - int(previous["attempted_total"]))
+            easy_delta = max(0, int(row["easy_total"]) - int(previous["easy_total"]))
+            medium_delta = max(0, int(row["medium_total"]) - int(previous["medium_total"]))
+            hard_delta = max(0, int(row["hard_total"]) - int(previous["hard_total"]))
+
+        # Per-language cumulative stats -> per-language delta since previous sync.
+        languages = set(current_languages) | set(previous_languages)
+        if not languages:
+            rows.append({
+                "log_date": row["snapshot_date"],
+                "platform": row["platform"],
+                "language": "Unknown",
+                "attempted": attempted_delta,
+                "solved": solved_delta,
+                "minutes": 0,
+                "easy": easy_delta,
+                "medium": medium_delta,
+                "hard": hard_delta,
+            })
+        else:
+            for language in languages:
+                cur = current_languages.get(language, {})
+                prev = previous_languages.get(language, {})
+                rows.append({
+                    "log_date": row["snapshot_date"],
+                    "platform": row["platform"],
+                    "language": language,
+                    "attempted": max(0, int(cur.get("attempted", 0)) - int(prev.get("attempted", 0))),
+                    "solved": max(0, int(cur.get("solved", 0)) - int(prev.get("solved", 0))),
+                    "minutes": 0,
+                    "easy": 0,
+                    "medium": 0,
+                    "hard": 0,
                 })
-    return result
+
+        previous = row
+
+    return pd.DataFrame(rows)
 
 
-BANK = prepared_bank()
-
-
-def topic_average(subject, topic):
-    df = quiz_df()
-    if df.empty:
-        return None
-    x = df[(df["subject"] == subject) & (df["topic"] == topic)]
-    if x.empty:
-        return None
-    return float(x["score_percent"].mean())
-
-
-def recommended_difficulty(subject, topic):
-    avg = topic_average(subject, topic)
-    if avg is None:
-        return "Medium"
-    if avg < 50:
-        return "Easy"
-    if avg < 80:
-        return "Medium"
-    return "Hard"
-
-
-def question_count(minutes):
-    if minutes <= 15:
-        return 2
-    if minutes <= 25:
-        return 3
-    return 4
-
-
-def select_unique_questions(subject, topic, minutes):
-    pool = BANK.get(subject, {}).get(topic, [])
-    used = used_question_ids(subject, topic)
-    unused = [q for q in pool if q["id"] not in used]
-
-    if not unused:
-        return []
-
-    target = min(question_count(minutes), len(unused))
-    desired = recommended_difficulty(subject, topic)
-
-    preferred = [q for q in unused if q["difficulty"] == desired]
-    other = [q for q in unused if q["difficulty"] != desired]
-    random.shuffle(preferred)
-    random.shuffle(other)
-    ordered = preferred + other
-    return ordered[:target]
-
-
-def weak_topic():
-    df = quiz_df()
-    if df.empty:
-        return None
-    grouped = (
-        df.groupby(["subject", "topic"], as_index=False)["score_percent"]
-        .mean()
-        .sort_values("score_percent")
+def codeforces_sync(username):
+    url = "https://codeforces.com/api/user.status"
+    response = requests.get(
+        url,
+        params={"handle": username, "from": 1, "count": 10000},
+        timeout=15,
+        headers={"User-Agent": "MindMate/1.0"},
     )
-    row = grouped.iloc[0]
-    return row["subject"], row["topic"], float(row["score_percent"])
+    response.raise_for_status()
+    data = response.json()
+    if data.get("status") != "OK":
+        raise ValueError(data.get("comment", "Codeforces returned an error."))
+
+    submissions = data.get("result", [])
+    language_stats = {}
+    solved_problem_keys = set()
+    solved_by_difficulty = {"easy": 0, "medium": 0, "hard": 0}
+
+    for sub in submissions:
+        lang = sub.get("programmingLanguage") or "Unknown"
+        bucket = language_stats.setdefault(lang, {"attempted": 0, "solved": 0})
+        bucket["attempted"] += 1
+
+        problem = sub.get("problem", {})
+        problem_key = f"{problem.get('contestId', '')}-{problem.get('index', '')}"
+        if sub.get("verdict") == "OK":
+            if problem_key not in solved_problem_keys:
+                solved_problem_keys.add(problem_key)
+                bucket["solved"] += 1
+
+                rating = problem.get("rating")
+                if rating is None or rating < 1300:
+                    solved_by_difficulty["easy"] += 1
+                elif rating < 1800:
+                    solved_by_difficulty["medium"] += 1
+                else:
+                    solved_by_difficulty["hard"] += 1
+
+    return {
+        "attempted_total": len(submissions),
+        "solved_total": len(solved_problem_keys),
+        "language_stats": language_stats,
+        "easy_total": solved_by_difficulty["easy"],
+        "medium_total": solved_by_difficulty["medium"],
+        "hard_total": solved_by_difficulty["hard"],
+        "message": f"Synced {len(submissions)} recent submissions from Codeforces.",
+    }
 
 
-# ============================================================
-# SESSION STATE
-# ============================================================
+def leetcode_sync(username):
+    endpoint = "https://leetcode.com/graphql"
+    query = """
+    query userStats($username: String!) {
+      matchedUser(username: $username) {
+        username
+        submitStatsGlobal {
+          acSubmissionNum { difficulty count submissions }
+          totalSubmissionNum { difficulty count submissions }
+        }
+        languageProblemCount {
+          languageName
+          problemsSolved
+        }
+      }
+    }
+    """
+    response = requests.post(
+        endpoint,
+        json={"query": query, "variables": {"username": username}},
+        timeout=20,
+        headers={
+            "Content-Type": "application/json",
+            "User-Agent": "MindMate/1.0",
+            "Referer": "https://leetcode.com/",
+        },
+    )
+    response.raise_for_status()
+    payload = response.json()
+
+    matched = (payload.get("data") or {}).get("matchedUser")
+    if not matched:
+        raise ValueError("LeetCode user not found or profile is unavailable.")
+
+    stats = matched.get("submitStatsGlobal") or {}
+    accepted = stats.get("acSubmissionNum") or []
+    total = stats.get("totalSubmissionNum") or []
+
+    def total_for(items, difficulty):
+        for item in items:
+            if item.get("difficulty") == difficulty:
+                return int(item.get("count") or 0)
+        return 0
+
+    solved_total = total_for(accepted, "All")
+    attempted_submissions = total_for(total, "All")
+    language_stats = {}
+
+    for item in matched.get("languageProblemCount") or []:
+        lang = item.get("languageName") or "Unknown"
+        solved = int(item.get("problemsSolved") or 0)
+        language_stats[lang] = {
+            # LeetCode exposes solved-problem totals by language, not a
+            # reliable lifetime attempted count by language.
+            "attempted": solved,
+            "solved": solved,
+        }
+
+    return {
+        "attempted_total": attempted_submissions,
+        "solved_total": solved_total,
+        "language_stats": language_stats,
+        "easy_total": total_for(accepted, "Easy"),
+        "medium_total": total_for(accepted, "Medium"),
+        "hard_total": total_for(accepted, "Hard"),
+        "message": "LeetCode profile totals synced. Daily changes appear after repeated snapshots.",
+    }
+
+
+def sync_coding_account(user_id, coding_id, platform):
+    if not coding_id.strip():
+        raise ValueError("Enter your coding-platform user ID/handle first.")
+
+    if platform == "Codeforces":
+        data = codeforces_sync(coding_id.strip())
+    elif platform == "LeetCode":
+        data = leetcode_sync(coding_id.strip())
+    else:
+        raise ValueError(
+            "Automatic sync is currently supported for Codeforces and LeetCode. "
+            "Choose one of these platforms; no manual problem-count entry is used."
+        )
+
+    save_coding_snapshot(
+        user_id,
+        coding_id.strip(),
+        platform,
+        date.today(),
+        data["solved_total"],
+        data["attempted_total"],
+        data["language_stats"],
+        data["easy_total"],
+        data["medium_total"],
+        data["hard_total"],
+    )
+    return data
+
+
+def save_stress(user_id, level, note):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO stress_logs(user_id,level,note,logged_at) VALUES(?,?,?,?)",
+        (user_id, level, note, datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+
+
+def stress_df(user_id):
+    conn = get_conn()
+    df = pd.read_sql_query(
+        "SELECT * FROM stress_logs WHERE user_id=? ORDER BY logged_at",
+        conn,
+        params=(user_id,),
+    )
+    conn.close()
+    return df
+
+
+def save_task(user_id, task_date, subject, topic, start_time, duration, priority):
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO tasks(user_id,task_date,subject,topic,start_time,duration,priority)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (user_id, str(task_date), subject, topic, start_time, duration, priority),
+    )
+    conn.commit()
+    conn.close()
+
+
+def tasks_df(user_id, task_date=None):
+    conn = get_conn()
+    if task_date:
+        df = pd.read_sql_query(
+            "SELECT * FROM tasks WHERE user_id=? AND task_date=? ORDER BY start_time",
+            conn,
+            params=(user_id, str(task_date)),
+        )
+    else:
+        df = pd.read_sql_query(
+            "SELECT * FROM tasks WHERE user_id=? ORDER BY task_date,start_time",
+            conn,
+            params=(user_id,),
+        )
+    conn.close()
+    return df
+
+
+def toggle_task(user_id, task_id, completed):
+    conn = get_conn()
+    conn.execute(
+        "UPDATE tasks SET completed=? WHERE id=? AND user_id=?",
+        (int(completed), task_id, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ----------------------------- Question bank -----------------------------
+# The user can add more questions from Settings. Built-ins are only a starter
+# bank. Every question has a permanent ID, enabling true non-repetition.
+QUESTION_BANK = [
+    ("DBMS", "SQL Basics", "DBMS-001", "Which SQL command retrieves rows from a table?",
+     ["SELECT", "INSERT", "UPDATE", "DELETE"], "SELECT", "Easy"),
+    ("DBMS", "SQL Basics", "DBMS-002", "Which clause filters rows?",
+     ["WHERE", "ORDER BY", "GROUP BY", "JOIN"], "WHERE", "Easy"),
+    ("DBMS", "SQL Basics", "DBMS-003", "Which key uniquely identifies a row?",
+     ["Foreign key", "Primary key", "Candidate value", "Index only"], "Primary key", "Easy"),
+    ("DBMS", "Normalization", "DBMS-004", "Which normal form removes repeating groups?",
+     ["1NF", "2NF", "3NF", "BCNF"], "1NF", "Medium"),
+    ("DBMS", "Normalization", "DBMS-005", "3NF mainly removes:",
+     ["Transitive dependency", "All keys", "All redundancy", "Every foreign key"],
+     "Transitive dependency", "Medium"),
+
+    ("Data Structures", "Trees", "DS-001", "Which structure is a binary search tree?",
+     ["A tree ordered by key", "A queue", "A stack", "A graph without edges"],
+     "A tree ordered by key", "Easy"),
+    ("Data Structures", "Stacks", "DS-002", "A stack follows which principle?",
+     ["FIFO", "LIFO", "Random", "Priority only"], "LIFO", "Easy"),
+    ("Data Structures", "Queues", "DS-003", "A queue follows which principle?",
+     ["LIFO", "FIFO", "Random", "Tree order"], "FIFO", "Easy"),
+    ("Data Structures", "Graphs", "DS-004", "BFS normally uses a:",
+     ["Queue", "Stack", "Heap", "Hash table"], "Queue", "Medium"),
+    ("Data Structures", "Graphs", "DS-005", "DFS commonly uses:",
+     ["Queue", "Stack or recursion", "Only heap", "Only array"],
+     "Stack or recursion", "Medium"),
+
+    ("Python", "Functions", "PY-001", "Which keyword defines a Python function?",
+     ["def", "func", "define", "function"], "def", "Easy"),
+    ("Python", "Exceptions", "PY-002", "Which keyword handles an exception?",
+     ["except", "catch", "handle", "error"], "except", "Easy"),
+    ("Python", "OOP", "PY-003", "Which method initializes an object?",
+     ["__init__", "__start__", "constructor()", "initiate"], "__init__", "Medium"),
+
+    ("COA", "Cache", "COA-001", "Cache memory is generally:",
+     ["Faster than main memory", "Slower than a hard disk", "Permanent storage", "An input device"],
+     "Faster than main memory", "Easy"),
+    ("COA", "DMA", "COA-002", "DMA stands for:",
+     ["Direct Memory Access", "Data Memory Allocation", "Digital Memory Array", "Direct Module Access"],
+     "Direct Memory Access", "Easy"),
+
+    ("Modern Physics", "Photoelectric Effect", "PHY-001",
+     "The minimum frequency required for photoemission is called:",
+     ["Threshold frequency", "Resonant frequency", "Natural frequency", "Clock frequency"],
+     "Threshold frequency", "Medium"),
+    ("Modern Physics", "Dual Nature", "PHY-002",
+     "Photon energy is given by:",
+     ["E=hf", "E=mc", "E=IR", "E=Pt"],
+     "E=hf", "Easy"),
+
+    ("CRTC", "Number Systems", "CRTC-001", "Hexadecimal has base:",
+     ["2", "8", "10", "16"], "16", "Easy"),
+    ("CRTC", "Percentages", "CRTC-002", "20% of 150 is:",
+     ["20", "25", "30", "35"], "30", "Easy"),
+
+    ("DAE", "Basics", "DAE-001", "In data analysis, a dataset is primarily a collection of:",
+     ["Observations", "Only images", "Only programs", "Only passwords"],
+     "Observations", "Easy"),
+    ("DAE", "Basics", "DAE-002", "A missing value is commonly represented as:",
+     ["Null/NaN", "CPU", "Loop", "Pointer only"], "Null/NaN", "Easy"),
+
+    ("ASE", "Basics", "ASE-001", "Software testing is primarily used to:",
+     ["Find defects", "Increase monitor size", "Replace requirements", "Delete source code"],
+     "Find defects", "Easy"),
+    ("ASE", "Basics", "ASE-002", "A requirement describes:",
+     ["What a system should do", "Only the UI color", "Only a variable name", "Only hardware cost"],
+     "What a system should do", "Easy"),
+
+    ("AI", "Machine Learning", "AI-001", "Supervised learning uses:",
+     ["Labeled data", "No data", "Only random guesses", "Only images"],
+     "Labeled data", "Easy"),
+    ("AI", "Machine Learning", "AI-002", "Classification predicts:",
+     ["Categories", "Only continuous values", "Database rows", "CPU cycles"],
+     "Categories", "Easy"),
+
+    ("C++", "Basics", "CPP-001", "Which symbol ends a typical C++ statement?",
+     [";", ":", ".", ","], ";", "Easy"),
+    ("C++", "OOP", "CPP-002", "Which concept lets a class derive from another?",
+     ["Inheritance", "Iteration", "Compilation", "Hashing"],
+     "Inheritance", "Easy"),
+
+    ("P&S", "Statistics", "PS-001", "The arithmetic average is called:",
+     ["Mean", "Median", "Mode", "Range"], "Mean", "Easy"),
+    ("P&S", "Probability", "PS-002", "A probability must lie between:",
+     ["0 and 1", "-1 and 1", "1 and 100", "Any values"],
+     "0 and 1", "Easy"),
+
+    ("ADSAA", "Algorithms", "ADSAA-001", "Binary search requires the data to be:",
+     ["Sorted", "Random", "Encrypted", "Duplicated"],
+     "Sorted", "Easy"),
+    ("ADSAA", "Algorithms", "ADSAA-002", "Average quicksort complexity is:",
+     ["O(n log n)", "O(1)", "O(log n)", "O(n!)"],
+     "O(n log n)", "Medium"),
+]
+
+
+def seed_questions():
+    conn = get_conn()
+    for subject, topic, qid, question, options, answer, difficulty in QUESTION_BANK:
+        conn.execute(
+            "INSERT OR IGNORE INTO quiz_questions(id,subject,topic,question,options_json,answer,difficulty)"
+            " VALUES(?,?,?,?,?,?,?)",
+            (qid, subject, topic, question, json.dumps(options), answer, difficulty),
+        )
+    conn.commit()
+    conn.close()
+
+
+seed_questions()
+
+
+def get_questions(subject, topic):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT id,question,options_json,answer,difficulty FROM quiz_questions "
+        "WHERE subject=? AND topic=?",
+        (subject, topic),
+    ).fetchall()
+    conn.close()
+    return [
+        {
+            "id": r[0],
+            "question": r[1],
+            "options": json.loads(r[2]),
+            "answer": r[3],
+            "difficulty": r[4],
+        }
+        for r in rows
+    ]
+
+
+def insert_custom_question(subject, topic, question, options, answer, difficulty):
+    qid = f"CUSTOM-{secrets.token_hex(6)}"
+    conn = get_conn()
+    conn.execute(
+        "INSERT INTO quiz_questions(id,subject,topic,question,options_json,answer,difficulty)"
+        " VALUES(?,?,?,?,?,?,?)",
+        (qid, subject, topic, question, json.dumps(options), answer, difficulty),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ----------------------------- Puzzle bank -----------------------------
+# Each puzzle has a unique ID. Only unsolved/unused puzzles are selected.
+PUZZLES = [
+    ("SUD-001", "Sudoku", "Sudoku 4x4", "Fill the grid so every row and column has 1-4."),
+    ("ARR-001", "Arrows", "Arrow Memory", "Remember the arrow sequence shown in the game."),
+    ("SNA-001", "Snake", "Snake Game", "Collect food without hitting the wall or yourself."),
+    ("DINO-001", "Dinosaur", "Dino Runner", "Jump over obstacles and survive as long as possible."),
+    ("SUD-002", "Sudoku", "Sudoku 4x4", "Solve another 4x4 Sudoku board."),
+    ("ARR-002", "Arrows", "Arrow Memory", "Repeat a longer arrow sequence."),
+    ("SNA-002", "Snake", "Snake Game", "Survive a new snake round."),
+    ("DINO-002", "Dinosaur", "Dino Runner", "Survive a faster dino round."),
+]
+
+
+def used_puzzles(user_id):
+    conn = get_conn()
+    rows = conn.execute(
+        "SELECT puzzle_id FROM puzzle_attempts WHERE user_id=?", (user_id,)
+    ).fetchall()
+    conn.close()
+    return {r[0] for r in rows}
+
+
+def record_puzzle(user_id, puzzle_id, puzzle_type, score):
+    conn = get_conn()
+    conn.execute(
+        "INSERT OR IGNORE INTO puzzle_attempts(user_id,puzzle_id,puzzle_type,score,played_at)"
+        " VALUES(?,?,?,?,?)",
+        (user_id, puzzle_id, puzzle_type, score, datetime.now().isoformat(timespec="seconds")),
+    )
+    conn.commit()
+    conn.close()
+
+
+# ----------------------------- State -----------------------------
 defaults = {
     "logged_in": False,
     "user_id": None,
     "username": "",
+    "name": "",
     "page": "Dashboard",
-    "subjects": ALL_SUBJECTS[:],
-    "exam_date": str(dt.date.today() + dt.timedelta(days=30)),
     "timer_running": False,
+    "timer_started": None,
     "timer_end": None,
-    "timer_duration": 25,
-    "timer_subject": ALL_SUBJECTS[0],
-    "timer_topic": TOPICS[ALL_SUBJECTS[0]][0],
+    "timer_planned": 25,
+    "timer_subject": "",
+    "timer_topic": "",
     "timer_completed": False,
-    "quiz_unlocked": None,
     "quiz_questions": [],
-    "quiz_answers": {},
-    "quiz_token": "",
-    "quiz_result": None,
-    "coding_streak": 0,
-    "study_streak": 0,
+    "quiz_index": 0,
+    "quiz_score": 0,
+    "quiz_started": False,
+    "quiz_submitted": False,
+    "quiz_answered_ids": set(),
+    "chat": [],
+    "selected_puzzle": None,
 }
-for key, value in defaults.items():
-    if key not in st.session_state:
-        st.session_state[key] = value
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
 
 
-def load_user():
-    subjects, exam = load_preferences(st.session_state.user_id)
-    st.session_state.subjects = [s for s in subjects if s in ALL_SUBJECTS] or ALL_SUBJECTS[:]
-    st.session_state.exam_date = exam
+def logout():
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 
 def go(page):
     st.session_state.page = page
 
 
-def study_streak_days():
-    df = study_df()
-    if df.empty:
-        return 0
-    dates = set(pd.to_datetime(df["started_at"]).dt.date.tolist())
-    dates = {d for d in dates if d is not None}
-    if not dates:
-        return 0
-    streak = 0
-    day = max(dates)
-    while day in dates:
-        streak += 1
-        day -= dt.timedelta(days=1)
-    return streak
-
-
-def coding_streak_days():
-    df = coding_df()
-    if df.empty:
-        return 0
-    dates = set(pd.to_datetime(df["logged_at"]).dt.date.tolist())
-    if not dates:
-        return 0
-    streak = 0
-    day = max(dates)
-    while day in dates:
-        streak += 1
-        day -= dt.timedelta(days=1)
-    return streak
-
-
-def overall_progress():
-    s = study_df()
-    q = quiz_df()
-    study_score = min(100, int((s["minutes"].sum() / 240) * 100)) if not s.empty else 0
-    quiz_score = int(q["score_percent"].mean()) if not q.empty else 0
-    return int(study_score * 0.55 + quiz_score * 0.45)
-
-
-def smart_recommendation():
-    weak = weak_topic()
-    if weak and weak[2] < 70:
-        return f"Focus next on **{weak[1]}** ({weak[0]}). Your current average is **{weak[2]:.0f}%**."
-    pending_subjects = st.session_state.subjects
-    if pending_subjects:
-        return f"Choose a topic from **{pending_subjects[0]}**, study with the timer, then take its fresh topic quiz."
-    return "Start a study session to build your personalized recommendation."
-
-
-# ============================================================
-# INITIALIZE
-# ============================================================
-init_db()
-
 # ============================================================
 # LOGIN
 # ============================================================
 if not st.session_state.logged_in:
     st.markdown(
-        "<div style='text-align:center;padding:45px 10px 10px'>"
-        "<div style='font-size:72px'>🧠</div>"
-        "<h1 style='color:#4A90E2;font-size:46px'>MindMate</h1>"
-        "<p style='font-size:19px;color:#666'>Smart Study Companion</p>"
-        "</div>",
+        '<div class="main-header">🧠 MindMate</div>'
+        '<div style="text-align:center;font-size:1.2rem">Smart Study Companion</div>',
         unsafe_allow_html=True,
     )
-    _, col, _ = st.columns([1, 2, 1])
-    with col:
+
+    login_tab, register_tab = st.tabs(["🔐 Login", "📝 Create Account"])
+
+    with login_tab:
         with st.form("login_form"):
-            username = st.text_input("Username", placeholder="Enter username")
-            password = st.text_input("Password", type="password", placeholder="Enter password")
-            submit = st.form_submit_button("🔐 Login", use_container_width=True)
-        if submit:
-            if not username or not password:
-                st.error("Please enter both username and password.")
-            else:
-                user_id = authenticate(username, password)
-                if user_id:
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Login", use_container_width=True)
+            if submitted:
+                user = authenticate(username, password)
+                if user:
                     st.session_state.logged_in = True
-                    st.session_state.user_id = user_id
-                    st.session_state.username = username.strip()
-                    load_user()
+                    st.session_state.user_id = user[0]
+                    st.session_state.name = user[1]
+                    st.session_state.username = username
+                    st.session_state.page = "Dashboard"
                     st.rerun()
                 else:
                     st.error("Invalid username or password.")
-        st.info(f"Demo: **{DEMO_USERNAME}** / **{DEMO_PASSWORD}**")
+
+    with register_tab:
+        with st.form("register_form"):
+            name = st.text_input("Full name")
+            username = st.text_input("Create username")
+            email = st.text_input("Email")
+            password = st.text_input("Create password", type="password")
+            confirm = st.text_input("Confirm password", type="password")
+            submitted = st.form_submit_button("Create Account", use_container_width=True)
+
+            if submitted:
+                if not all([name.strip(), username.strip(), email.strip(), password]):
+                    st.warning("Fill in all fields.")
+                elif len(password) < 6:
+                    st.warning("Password must contain at least 6 characters.")
+                elif password != confirm:
+                    st.error("Passwords do not match.")
+                else:
+                    ok, msg = create_user(username, name, email, password)
+                    if ok:
+                        st.success("Account created. Go to Login.")
+                    else:
+                        st.error(msg)
+
+    st.info("Each user creates their own password. No fixed project-wide password is required.")
     st.stop()
 
-# ============================================================
-# SIDEBAR / FINAL MODULE ORDER
-# ============================================================
-with st.sidebar:
-    st.markdown("## 🧠 MindMate")
-    st.caption(f"Welcome, **{st.session_state.username}**")
-    st.divider()
-
-    pages = [
-        "🏠 Dashboard",
-        "📚 Study Planner",
-        "📅 Tomorrow's Plan",
-        "📝 Adaptive Quiz",
-        "💬 Doubt Chatbot",
-        "💻 Coding Tracker",
-        "😌 Stress Monitor",
-        "🧩 Puzzle Zone",
-        "📊 Analytics",
-        "⚙️ Settings",
-    ]
-
-    labels = [p.split(" ", 1)[1] for p in pages]
-    current = st.session_state.page if st.session_state.page in labels else "Dashboard"
-    selected_index = labels.index(current)
-
-    selected = st.radio(
-        "Navigation",
-        labels,
-        index=selected_index,
-        key="navigation",
-    )
-    if selected != st.session_state.page:
-        st.session_state.page = selected
-        st.rerun()
-
-    st.divider()
-    if st.button("🚪 Logout", use_container_width=True):
-        st.session_state.clear()
-        st.rerun()
 
 # ============================================================
-# TIMER CHECK
+# GLOBAL TIMER
 # ============================================================
 if st.session_state.timer_running:
     remaining = max(0, int(st.session_state.timer_end - time.time()))
     if remaining <= 0:
         st.session_state.timer_running = False
         st.session_state.timer_completed = True
-        st.session_state.quiz_unlocked = {
-            "subject": st.session_state.timer_subject,
-            "topic": st.session_state.timer_topic,
-            "minutes": st.session_state.timer_duration,
-        }
+        planned = st.session_state.timer_planned
         save_study(
             st.session_state.user_id,
             st.session_state.timer_subject,
             st.session_state.timer_topic,
-            st.session_state.timer_duration,
-            1,
+            planned,
+            planned,
+            True,
+            datetime.fromtimestamp(st.session_state.timer_started).isoformat(timespec="seconds"),
+            datetime.now().isoformat(timespec="seconds"),
         )
-        st.success("🎉 Study session completed. Your topic quiz is unlocked!")
-    else:
-        st.session_state.timer_remaining = remaining
+
+
+# ============================================================
+# SIDEBAR / 12 MODULES
+# ============================================================
+with st.sidebar:
+    st.markdown("## 🧠 MindMate")
+    st.write(f"Welcome, **{st.session_state.name}**")
+
+    pages = [
+        "Dashboard",
+        "Study Planner",
+        "Tomorrow's Plan",
+        "Adaptive Quiz",
+        "Doubt Chatbot",
+        "Coding Tracker",
+        "Stress Monitor",
+        "Puzzle Zone",
+        "Analytics",
+        "Settings",
+    ]
+
+    selected = st.radio(
+        "Navigation",
+        pages,
+        index=pages.index(st.session_state.page) if st.session_state.page in pages else 0,
+    )
+    st.session_state.page = selected
+
+    st.divider()
+    if st.button("🚪 Logout", use_container_width=True):
+        logout()
 
 # ============================================================
 # DASHBOARD
 # ============================================================
 if st.session_state.page == "Dashboard":
     st.title("🏠 Dashboard")
-    st.caption("Your semester study command center.")
+    st.caption("Your study, coding and wellbeing command center.")
 
-    exam = dt.date.fromisoformat(st.session_state.exam_date)
-    days_left = max(0, (exam - dt.date.today()).days)
+    subjects = user_subjects(st.session_state.user_id)
+    qdf = quiz_df(st.session_state.user_id)
+    sdf = study_df(st.session_state.user_id)
+    cdf = coding_df(st.session_state.user_id)
+    edf = exams_df(st.session_state.user_id)
 
-    qdf = quiz_df()
-    sdf = study_df()
-    cdf = coding_df()
-    stress = stress_df()
+    total_study = int(sdf["actual_minutes"].sum()) if not sdf.empty else 0
+    today_study = int(
+        sdf[sdf["started_at"].str[:10] == str(date.today())]["actual_minutes"].sum()
+    ) if not sdf.empty else 0
+    quiz_avg = round(qdf["score"].mean(), 1) if not qdf.empty else 0
+    coding_totals = coding_current_totals(st.session_state.user_id)
+    solved = int(coding_totals["solved"])
 
-    quiz_avg = float(qdf["score_percent"].mean()) if not qdf.empty else 0
-    today_minutes = (
-        int(sdf[pd.to_datetime(sdf["started_at"]).dt.date == dt.date.today()]["minutes"].sum())
-        if not sdf.empty else 0
-    )
-    stress_level = int(stress.iloc[0]["level"]) if not stress.empty else 0
+    exams_future = edf[edf["exam_date"] >= str(date.today())] if not edf.empty else edf
+    next_exam = exams_future.iloc[0] if not exams_future.empty else None
 
-    c1,c2,c3,c4,c5 = st.columns(5)
-    c1.metric("⏳ Exam", f"{days_left} days")
-    c2.metric("📚 Today", f"{today_minutes} min")
-    c3.metric("📝 Quiz Avg", f"{quiz_avg:.0f}%")
-    c4.metric("💻 Coding Streak", f"{coding_streak_days()} days")
-    c5.metric("📈 Progress", f"{overall_progress()}%")
+    a, b, c, d, e = st.columns(5)
+    a.metric("📚 Today Study", f"{today_study} min")
+    b.metric("📝 Quiz Average", f"{quiz_avg}%")
+    c.metric("💻 Programs Solved", solved)
+    d.metric("📖 Subjects", len(subjects))
+    e.metric("🔥 Study Sessions", len(sdf))
 
-    st.subheader("🎯 Smart Recommendation")
-    st.info(smart_recommendation())
-
-    st.subheader("📚 Your Semester Subjects")
-    cols = st.columns(min(4, max(1, len(st.session_state.subjects))))
-    for i, subject in enumerate(st.session_state.subjects):
-        cols[i % len(cols)].success(subject)
-
-    st.subheader("🗓️ Subject Slotting")
-    slots = slots_df()
-    if slots.empty:
-        st.caption("Add your weekly subject slots from Settings.")
+    st.subheader("⏰ Next Exam")
+    if next_exam is not None:
+        exam_dt = datetime.strptime(
+            f"{next_exam['exam_date']} {next_exam['exam_time']}", "%Y-%m-%d %H:%M"
+        )
+        days = max(0, (exam_dt.date() - date.today()).days)
+        st.success(
+            f"**{next_exam['subject']}** — {exam_dt.strftime('%d %b %Y, %I:%M %p')} "
+            f"— **{days} day(s) remaining**"
+        )
     else:
-        st.dataframe(slots.head(12), use_container_width=True, hide_index=True)
+        st.info("Add your exam schedule in Settings.")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("⏰ Next Exam")
-        st.write(f"**{exam.strftime('%d %B %Y')}**")
-        st.progress(max(0, min(1, 1 - days_left / 365)))
-
-        st.subheader("📋 Today's Focus")
-        if st.session_state.quiz_unlocked:
-            u = st.session_state.quiz_unlocked
-            st.success(f"Quiz ready: **{u['subject']} → {u['topic']}**")
-            if st.button("📝 Take Unlocked Quiz", use_container_width=True):
-                go("Adaptive Quiz")
-                st.rerun()
-        else:
-            st.write("Start a topic study timer from Study Planner.")
-
-    with col2:
-        st.subheader("📅 Tomorrow Preview")
-        weak = weak_topic()
-        if weak:
-            st.write(f"1. 45 min — Revise **{weak[1]}** ({weak[0]})")
-            st.write(f"2. 30 min — Fresh **{weak[1]}** quiz")
-        else:
-            st.write("1. 30 min — Study your highest-priority topic")
-            st.write("2. 15–25 min — Complete a topic quiz")
-        st.write("3. 30 min — Coding practice")
-        st.write("4. 10 min — Stress check and break")
-
-    st.subheader("📊 Weekly Study Activity")
-    if not sdf.empty:
-        tmp = sdf.copy()
-        tmp["date"] = pd.to_datetime(tmp["started_at"]).dt.date.astype(str)
-        daily = tmp.groupby("date")["minutes"].sum().tail(7)
-        st.bar_chart(daily)
+    st.subheader("🎯 Today's Focus")
+    if st.session_state.timer_running:
+        remaining = max(0, int(st.session_state.timer_end - time.time()))
+        st.warning(
+            f"⏱️ Studying **{st.session_state.timer_subject} → "
+            f"{st.session_state.timer_topic}** | "
+            f"{remaining // 60:02d}:{remaining % 60:02d} remaining"
+        )
+        st.progress(
+            min(1, max(0, 1 - remaining / (st.session_state.timer_planned * 60)))
+        )
+    elif st.session_state.timer_completed:
+        st.success(
+            f"Study completed: **{st.session_state.timer_subject} → "
+            f"{st.session_state.timer_topic}**. Take your quiz now."
+        )
+        if st.button("📝 Take Quiz Now"):
+            go("Adaptive Quiz")
+            st.rerun()
     else:
-        st.info("Complete study sessions to see your real activity here.")
+        st.info("Start a focused study session from Study Planner.")
+
+    ws = None
+    if not qdf.empty:
+        topic_perf = qdf.groupby(["subject", "topic"])["score"].mean().reset_index()
+        topic_perf = topic_perf.sort_values("score")
+        if not topic_perf.empty:
+            ws = topic_perf.iloc[0]
+
+    if ws is not None:
+        st.markdown(
+            f'<div class="weak">🎯 <b>Weak topic:</b> {ws["subject"]} → '
+            f'{ws["topic"]} ({ws["score"]:.0f}%). Prioritize it in your next study session.</div>',
+            unsafe_allow_html=True,
+        )
+
+    st.subheader("📅 Exam & Subject Snapshot")
+    if subjects:
+        st.write(" • ".join(subjects))
+    else:
+        st.warning("Add your semester subjects in Settings.")
 
 # ============================================================
 # STUDY PLANNER
 # ============================================================
 elif st.session_state.page == "Study Planner":
     st.title("📚 Study Planner")
-    st.caption("Select a semester subject and topic. Finish the timer to unlock the quiz.")
+    st.caption("Focus timer first. Quiz unlocks only after the session finishes.")
 
-    subject = st.selectbox("Subject", st.session_state.subjects)
-    topic = st.selectbox("Topic", TOPICS[subject])
-    duration = st.selectbox("Study duration", [15, 25, 30, 45, 60])
+    subjects = user_subjects(st.session_state.user_id)
+    if not subjects:
+        st.warning("Add your semester subjects in Settings first.")
+        st.stop()
 
-    st.markdown(f"### 📖 {subject} → {topic}")
+    subject = st.selectbox("Subject", subjects)
+    topics = user_topics(st.session_state.user_id, subject)
+
+    st.markdown("### 📌 Topic")
+    if topics:
+        topic_choice = st.selectbox("Select topic", topics)
+    else:
+        topic_choice = st.text_input("Enter topic for this session")
+
+    duration = st.selectbox("Focused study duration", [15, 25, 30, 45, 60, 90])
 
     if st.session_state.timer_running:
         remaining = max(0, int(st.session_state.timer_end - time.time()))
         mins, secs = divmod(remaining, 60)
-        elapsed = st.session_state.timer_duration * 60 - remaining
-        st.metric("⏱️ Time Remaining", f"{mins:02d}:{secs:02d}")
-        st.progress(max(0, min(1, elapsed / max(1, st.session_state.timer_duration * 60))))
-        st.warning("Stay on this topic until the timer finishes.")
+        st.metric("⏱️ Time remaining", f"{mins:02d}:{secs:02d}")
+        st.progress(
+            min(1, max(0, 1 - remaining / (st.session_state.timer_planned * 60)))
+        )
+
+        if st.button("⏹️ Stop Early"):
+            elapsed = max(
+                1,
+                round((time.time() - st.session_state.timer_started) / 60),
+            )
+            save_study(
+                st.session_state.user_id,
+                st.session_state.timer_subject,
+                st.session_state.timer_topic,
+                st.session_state.timer_planned,
+                elapsed,
+                False,
+                datetime.fromtimestamp(st.session_state.timer_started).isoformat(timespec="seconds"),
+                datetime.now().isoformat(timespec="seconds"),
+            )
+            st.session_state.timer_running = False
+            st.session_state.timer_completed = False
+            st.rerun()
+
         time.sleep(1)
         st.rerun()
 
-    elif st.session_state.timer_completed and st.session_state.quiz_unlocked:
-        u = st.session_state.quiz_unlocked
-        st.success(f"🎉 Completed {u['minutes']} minutes of **{u['topic']}**.")
-        st.info("Your unique topic quiz is unlocked.")
-        if st.button("📝 Take Topic Quiz", use_container_width=True):
-            go("Adaptive Quiz")
+    elif st.session_state.timer_completed:
+        st.success(
+            f"🎉 Session complete! **{st.session_state.timer_subject} → "
+            f"{st.session_state.timer_topic}** quiz is unlocked."
+        )
+        if st.button("📝 Take Topic Quiz"):
+            st.session_state.page = "Adaptive Quiz"
             st.rerun()
-        if st.button("🔄 Start Another Session"):
+        if st.button("Start Another Session"):
             st.session_state.timer_completed = False
-            st.session_state.quiz_unlocked = None
             st.rerun()
 
     else:
-        st.info("The quiz unlocks only after the selected study timer is completed.")
-        if st.button("▶️ Start Study Timer", use_container_width=True):
-            st.session_state.timer_subject = subject
-            st.session_state.timer_topic = topic
-            st.session_state.timer_duration = duration
-            st.session_state.timer_end = time.time() + duration * 60
-            st.session_state.timer_running = True
-            st.session_state.timer_completed = False
-            st.session_state.quiz_unlocked = None
-            st.rerun()
+        if st.button("▶️ Start Focused Study Timer", use_container_width=True):
+            if not topic_choice.strip():
+                st.warning("Enter a topic first.")
+            else:
+                if not topics:
+                    add_topic(st.session_state.user_id, subject, topic_choice)
+                st.session_state.timer_subject = subject
+                st.session_state.timer_topic = topic_choice.strip()
+                st.session_state.timer_planned = duration
+                st.session_state.timer_started = time.time()
+                st.session_state.timer_end = time.time() + duration * 60
+                st.session_state.timer_running = True
+                st.session_state.timer_completed = False
+                st.rerun()
 
     st.divider()
-    st.subheader("📚 Study History")
-    sdf = study_df()
-    if sdf.empty:
-        st.info("No study sessions recorded yet.")
-    else:
-        st.dataframe(sdf.head(20), use_container_width=True, hide_index=True)
+    st.subheader("📝 Add Study Task")
+    with st.form("task_form"):
+        task_date = st.date_input("Date", date.today())
+        task_subject = st.selectbox("Task subject", subjects)
+        task_topics = user_topics(st.session_state.user_id, task_subject)
+        task_topic = st.text_input(
+            "Task topic",
+            value=task_topics[0] if task_topics else "",
+        )
+        start_time = st.time_input("Start time", datetime.now().time().replace(second=0, microsecond=0))
+        task_duration = st.number_input("Duration (minutes)", 15, 300, 45, 15)
+        priority = st.selectbox("Priority", ["High", "Medium", "Low"])
+        if st.form_submit_button("➕ Add Task"):
+            save_task(
+                st.session_state.user_id,
+                task_date,
+                task_subject,
+                task_topic,
+                start_time.strftime("%H:%M"),
+                task_duration,
+                priority,
+            )
+            st.success("Task added.")
+
+    today_tasks = tasks_df(st.session_state.user_id, date.today())
+    if not today_tasks.empty:
+        st.subheader("Today's Timetable")
+        for _, row in today_tasks.iterrows():
+            checked = st.checkbox(
+                f"{row['start_time']} — {row['subject']} → {row['topic']} "
+                f"({row['duration']} min, {row['priority']})",
+                value=bool(row["completed"]),
+                key=f"task_{row['id']}",
+            )
+            if checked != bool(row["completed"]):
+                toggle_task(st.session_state.user_id, int(row["id"]), checked)
+                st.rerun()
 
 # ============================================================
 # TOMORROW'S PLAN
 # ============================================================
 elif st.session_state.page == "Tomorrow's Plan":
     st.title("📅 Tomorrow's Plan")
-    st.caption("Generated from your quiz performance, weak topics, study activity and semester subjects.")
+    st.caption("Automatically prioritizes weak topics and upcoming exams.")
 
-    weak = weak_topic()
-    if weak:
-        st.success(f"🎯 Weak topic detected: **{weak[1]}** — {weak[2]:.0f}% average.")
+    qdf = quiz_df(st.session_state.user_id)
+    edf = exams_df(st.session_state.user_id)
+    subjects = user_subjects(st.session_state.user_id)
+
+    weak = []
+    if not qdf.empty:
+        weak_df = (
+            qdf.groupby(["subject", "topic"])["score"]
+            .mean()
+            .reset_index()
+            .sort_values("score")
+        )
+        weak = weak_df[weak_df["score"] < 80].head(3).to_dict("records")
+
+    plan = []
+    for item in weak:
+        plan.append(
+            {
+                "time": "09:00",
+                "subject": item["subject"],
+                "topic": item["topic"],
+                "minutes": 45,
+                "reason": f"Weak topic ({item['score']:.0f}%)",
+            }
+        )
+
+    used_slots = {x["time"] for x in plan}
+    fallback_subjects = subjects[:]
+    slot_times = ["11:00", "14:00", "16:00", "19:00"]
+    for slot, subj in zip(slot_times, fallback_subjects):
+        if slot in used_slots:
+            continue
+        topics = user_topics(st.session_state.user_id, subj)
+        plan.append(
+            {
+                "time": slot,
+                "subject": subj,
+                "topic": topics[0] if topics else "Revision",
+                "minutes": 45,
+                "reason": "Semester subject revision",
+            }
+        )
+
+    if not plan:
+        st.info("Add subjects and complete some study/quiz sessions to generate a plan.")
     else:
-        st.info("Complete at least one topic quiz to make the plan performance-aware.")
+        for item in plan[:6]:
+            st.markdown(
+                f'<div class="card"><b>{item["time"]}</b> — '
+                f'<b>{item["subject"]}</b> → {item["topic"]}<br>'
+                f'{item["minutes"]} min • {item["reason"]}</div>',
+                unsafe_allow_html=True,
+            )
 
-    if st.button("✨ Generate Smart Plan", use_container_width=True):
-        plan = []
-        if weak and weak[2] < 70:
-            plan.append(f"45 min — Revise {weak[0]} → {weak[1]}")
-            plan.append(f"30 min — Study timer + fresh quiz: {weak[1]}")
-        else:
-            subject = st.session_state.subjects[0]
-            topic = TOPICS[subject][0]
-            plan.append(f"30 min — Study {subject} → {topic}")
-            plan.append(f"15–25 min — Topic quiz: {topic}")
-
-        plan.append("30 min — Coding practice")
-        plan.append("15 min — Revision of an unfinished topic")
-        plan.append("10 min — Stress check + break")
-
-        st.session_state.tomorrow_plan = plan
-
-    if "tomorrow_plan" in st.session_state:
-        for i, item in enumerate(st.session_state.tomorrow_plan, 1):
-            st.success(f"{i}. {item}")
+    if not edf.empty:
+        future = edf[edf["exam_date"] >= str(date.today())]
+        if not future.empty:
+            exam = future.iloc[0]
+            st.info(
+                f"Upcoming exam priority: **{exam['subject']}** on "
+                f"**{exam['exam_date']} at {exam['exam_time']}**."
+            )
 
 # ============================================================
 # ADAPTIVE QUIZ
 # ============================================================
 elif st.session_state.page == "Adaptive Quiz":
     st.title("📝 Adaptive Topic Quiz")
-    st.caption("Questions are topic-specific and previously used question IDs are never reused until the topic pool is exhausted.")
+    st.caption(
+        "A completed study session unlocks the quiz. Questions already attempted "
+        "by this student/topic are excluded."
+    )
 
-    unlocked = st.session_state.quiz_unlocked
+    subjects = user_subjects(st.session_state.user_id)
+    if not subjects:
+        st.warning("Add subjects first.")
+        st.stop()
+
+    unlocked = st.session_state.timer_completed
+
     if unlocked:
-        subject = unlocked["subject"]
-        topic = unlocked["topic"]
-        minutes = unlocked["minutes"]
-        st.success(f"🔓 Unlocked: **{subject} → {topic}** after {minutes} minutes of study.")
+        subject = st.session_state.timer_subject
+        topic = st.session_state.timer_topic
+        st.success(f"🔓 Unlocked: **{subject} → {topic}**")
     else:
-        subject = st.selectbox("Subject", st.session_state.subjects)
-        topic = st.selectbox("Topic", TOPICS[subject])
-        minutes = st.selectbox("Study duration", [15,25,30,45,60])
-        st.warning("Complete the Study Planner timer for this topic before starting its quiz.")
+        subject = st.selectbox("Subject", subjects)
+        topics = user_topics(st.session_state.user_id, subject)
+        topic = st.selectbox("Topic", topics) if topics else st.text_input("Topic")
+        st.info("Complete a focused study timer for this topic before starting the quiz.")
 
-    avg = topic_average(subject, topic)
-    difficulty = recommended_difficulty(subject, topic)
-    pool = BANK.get(subject, {}).get(topic, [])
-    used = used_question_ids(subject, topic)
-    remaining = len(pool) - len(used)
+    available = get_questions(subject, topic)
+    used = used_question_ids(st.session_state.user_id, subject, topic)
+    fresh = [q for q in available if q["id"] not in used]
 
-    a,b,c = st.columns(3)
-    a.metric("Recommended Difficulty", difficulty)
-    b.metric("Question Pool", len(pool))
-    c.metric("Unused Questions", max(0, remaining))
+    st.write(f"Question bank: **{len(available)}** | Fresh for you: **{len(fresh)}**")
 
-    if unlocked and not st.session_state.quiz_questions:
-        selected_qs = select_unique_questions(subject, topic, minutes)
-        if selected_qs:
-            st.session_state.quiz_questions = selected_qs
-            st.session_state.quiz_answers = {}
-            st.session_state.quiz_token = now().isoformat()
-        else:
-            st.error("This topic's question pool has been completed. Add more questions to create another non-repeating quiz.")
+    if not available:
+        st.warning(
+            "No questions exist for this topic yet. Add questions in Settings → Question Bank."
+        )
 
-    if st.session_state.quiz_questions:
+    if not st.session_state.quiz_started:
+        if unlocked and available:
+            count = min(5, len(fresh))
+            if count == 0:
+                st.warning(
+                    "You have already attempted every question currently available "
+                    "for this topic. Add new questions to continue without repetition."
+                )
+            elif st.button("🎯 Start Fresh Topic Quiz", use_container_width=True):
+                selected_questions = random.sample(fresh, count)
+                st.session_state.quiz_questions = selected_questions
+                st.session_state.quiz_index = 0
+                st.session_state.quiz_score = 0
+                st.session_state.quiz_started = True
+                st.session_state.quiz_submitted = False
+                st.session_state.quiz_answered_ids = set()
+                st.rerun()
+        elif available and not unlocked:
+            st.info("Finish the Study Planner timer first.")
+
+    if st.session_state.quiz_started:
         questions = st.session_state.quiz_questions
-        st.write(f"**{len(questions)} unique questions** selected for this attempt.")
+        idx = st.session_state.quiz_index
 
-        for i, q in enumerate(questions):
-            st.markdown(f"### Q{i+1}. {q['q']}")
+        if idx < len(questions):
+            q = questions[idx]
+            st.progress(idx / len(questions))
+            st.markdown(f"### Question {idx + 1} / {len(questions)}")
+            st.caption(f"Difficulty: {q['difficulty']}")
+            st.write(q["question"])
+
             answer = st.radio(
-                "Choose one:",
+                "Choose one answer",
                 q["options"],
-                key=f"{st.session_state.quiz_token}_{q['id']}",
+                key=f"answer_{q['id']}",
             )
-            st.session_state.quiz_answers[q["id"]] = answer
 
-        if st.button("✅ Submit Quiz", use_container_width=True):
-            correct_count = sum(
-                st.session_state.quiz_answers.get(q["id"]) == q["answer"]
-                for q in questions
-            )
-            score = round(correct_count / len(questions) * 100)
-
-            rows = []
-            timestamp = now().isoformat(timespec="seconds")
-            for q in questions:
-                rows.append((
+            if st.button("Submit Answer", use_container_width=True):
+                correct = answer == q["answer"]
+                save_quiz_attempt(
                     st.session_state.user_id,
                     subject,
                     topic,
                     q["id"],
-                    int(st.session_state.quiz_answers.get(q["id"]) == q["answer"]),
-                    score,
-                    q["difficulty"],
-                    minutes,
-                    timestamp,
-                ))
-            save_quiz_rows(st.session_state.user_id, rows)
+                    answer,
+                    correct,
+                    100 if correct else 0,
+                )
+                st.session_state.quiz_answered_ids.add(q["id"])
+                if correct:
+                    st.session_state.quiz_score += 1
+                    st.success("✅ Correct")
+                else:
+                    st.error(f"❌ Correct answer: {q['answer']}")
 
-            st.session_state.quiz_result = {
-                "score": score,
-                "correct": correct_count,
-                "total": len(questions),
-                "subject": subject,
-                "topic": topic,
-            }
-            st.session_state.quiz_questions = []
-            st.session_state.quiz_answers = {}
-            st.session_state.quiz_unlocked = None
-            st.session_state.timer_completed = False
-            st.rerun()
-
-    if st.session_state.quiz_result:
-        r = st.session_state.quiz_result
-        st.divider()
-        st.subheader("📊 Latest Result")
-        x,y,z = st.columns(3)
-        x.metric("Score", f"{r['score']}%")
-        y.metric("Correct", f"{r['correct']}/{r['total']}")
-        z.metric("Topic", r["topic"])
-
-        if r["score"] >= 80:
-            st.success("🟢 Strong — next time MindMate will prefer harder questions.")
-        elif r["score"] >= 50:
-            st.warning("🟡 OK — revise this topic and practise again.")
+                st.session_state.quiz_index += 1
+                st.rerun()
         else:
-            st.error("🔴 Weak — this topic will be prioritized in recommendations.")
+            total = len(questions)
+            score = round(st.session_state.quiz_score / total * 100, 1)
+            st.success(f"🎉 Quiz completed — **{score}%**")
+
+            if score >= 80:
+                st.markdown(
+                    '<div class="ok">🟢 Strong understanding. Next time, use harder questions.</div>',
+                    unsafe_allow_html=True,
+                )
+            elif score >= 50:
+                st.markdown(
+                    '<div class="warn">🟡 Okay. Revise the topic and practice again.</div>',
+                    unsafe_allow_html=True,
+                )
+            else:
+                st.markdown(
+                    '<div class="weak">🔴 Weak topic. MindMate will prioritize it tomorrow.</div>',
+                    unsafe_allow_html=True,
+                )
+
+            st.session_state.quiz_started = False
+            st.session_state.quiz_submitted = True
+            st.session_state.timer_completed = False
+
+            if st.button("📚 Study This Topic Again"):
+                go("Study Planner")
+                st.rerun()
 
 # ============================================================
 # DOUBT CHATBOT
 # ============================================================
 elif st.session_state.page == "Doubt Chatbot":
     st.title("💬 Doubt Chatbot")
-    st.caption("Rule-based academic helper. It can be replaced with an AI API later without changing the module structure.")
+    st.caption("A local study assistant for explanations and study guidance.")
 
-    if "chat_history" not in st.session_state:
-        st.session_state.chat_history = [
-            {"role":"assistant","content":"Hi! Tell me your subject and doubt. I can give a concept explanation, example, revision hint, or practice question."}
+    if not st.session_state.chat:
+        st.session_state.chat = [
+            {
+                "role": "assistant",
+                "content": "Tell me the subject, topic and your doubt. I can give a simple explanation or a study approach."
+            }
         ]
 
-    for msg in st.session_state.chat_history:
+    for msg in st.session_state.chat:
         with st.chat_message(msg["role"]):
             st.write(msg["content"])
 
-    prompt = st.chat_input("Ask your doubt...")
+    prompt = st.chat_input("Type your doubt...")
     if prompt:
-        st.session_state.chat_history.append({"role":"user","content":prompt})
+        st.session_state.chat.append({"role": "user", "content": prompt})
         text = prompt.lower()
 
-        if "dbms" in text or "sql" in text:
-            response = "For DBMS, first identify the tables, keys, relationships and required output. For SQL, break the problem into SELECT, FROM, JOIN, WHERE, GROUP BY and HAVING as needed."
-        elif "ai" in text or "machine learning" in text:
-            response = "For AI/ML doubts, identify the task first: classification, regression, clustering, search, or reasoning. Then choose the appropriate representation and algorithm."
-        elif "c++" in text or "pointer" in text:
-            response = "For C++, check types, object lifetime and pointer/reference ownership. If you share the code, I can explain it step by step."
-        elif "python" in text:
-            response = "For Python, send the exact error or code. I can explain the concept and suggest a corrected approach."
-        elif "data structure" in text or "tree" in text or "graph" in text:
-            response = "For Data Structures, identify the operation and its complexity first. Then choose the structure that gives the required access/update behavior."
-        elif "physics" in text:
-            response = "For Modern Physics, write the given quantities, the governing equation, substitute units consistently, and check the final dimension."
-        elif "probability" in text or "statistics" in text:
-            response = "For P&S, define the random experiment and event first, then select the probability/statistical formula that matches the data."
+        if "quiz" in text:
+            response = "Study one topic with the focus timer first. After completion, MindMate unlocks a fresh topic quiz."
+        elif "weak" in text:
+            response = "Check Analytics. MindMate identifies weak topics from your actual quiz scores and recommends them for tomorrow."
+        elif "coding" in text or "program" in text:
+            response = "Set your Codeforces or LeetCode user ID in Settings, then use Sync in Coding Tracker. MindMate calculates dated activity and language strength from the platform data instead of asking you to enter problem counts."
+        elif "stress" in text:
+            response = "Use Stress Monitor to record your current stress level. If it is high, take a short break before another focused session."
         else:
-            response = "Tell me the subject, topic and exact question. I will break it into concept → given information → method → answer."
+            response = (
+                "For a precise academic answer, include the subject and topic, "
+                "for example: 'DBMS — explain normalization' or 'C++ — explain inheritance'."
+            )
 
-        st.session_state.chat_history.append({"role":"assistant","content":response})
+        st.session_state.chat.append({"role": "assistant", "content": response})
         st.rerun()
 
 # ============================================================
@@ -2100,254 +1560,558 @@ elif st.session_state.page == "Doubt Chatbot":
 # ============================================================
 elif st.session_state.page == "Coding Tracker":
     st.title("💻 Coding Tracker")
-    st.caption("Track each language separately and automatically classify it as Strong, OK or Weak.")
+    st.caption(
+        "Enter your coding-platform ID once. MindMate fetches public activity "
+        "and builds dated snapshots — you do not enter program counts manually."
+    )
 
-    languages = ["C++", "Python", "C", "Java", "JavaScript", "SQL"]
-    with st.form("coding_form"):
-        a,b,c,d = st.columns(4)
-        language = a.selectbox("Language", languages)
-        attempted = b.number_input("Problems attempted", 1, 500, 5)
-        solved = c.number_input("Problems solved", 0, 500, 4)
-        minutes = d.number_input("Practice minutes", 0, 1000, 30)
-        difficulty = st.selectbox("Main difficulty", ["Easy","Medium","Hard"])
-        save = st.form_submit_button("➕ Save Coding Session", use_container_width=True)
+    coding_id, platform, semester = profile(st.session_state.user_id)
 
-    if save:
-        solved = min(int(solved), int(attempted))
-        save_coding(st.session_state.user_id, language, int(attempted), solved, int(minutes), difficulty)
-        st.success("Coding session saved.")
-        st.rerun()
-
-    df = coding_df()
-    if df.empty:
-        st.info("Add coding sessions to see language strength.")
-    else:
-        grouped = df.groupby("language", as_index=False).agg(
-            Attempted=("attempted","sum"),
-            Solved=("solved","sum"),
-            Minutes=("minutes","sum"),
+    if platform not in ["Codeforces", "LeetCode"]:
+        st.warning(
+            "Automatic coding tracking currently supports **Codeforces** and "
+            "**LeetCode**. Set your platform and user ID in Settings."
         )
-        grouped["Accuracy"] = (grouped["Solved"] / grouped["Attempted"] * 100).round(0)
 
-        def language_status(x):
-            if x >= 80:
-                return "🟢 Strong"
-            if x >= 50:
-                return "🟡 OK"
-            return "🔴 Weak"
+    a, b = st.columns([2, 1])
+    with a:
+        st.write(f"**Coding User ID:** `{coding_id or 'Not set'}`")
+        st.write(f"**Platform:** `{platform}`")
+    with b:
+        if st.button("🔄 Sync Coding Activity", use_container_width=True):
+            if not coding_id:
+                st.error("Set your coding user ID in Settings first.")
+            elif platform not in ["Codeforces", "LeetCode"]:
+                st.error("Choose Codeforces or LeetCode for automatic tracking.")
+            else:
+                try:
+                    with st.spinner("Fetching coding activity..."):
+                        result = sync_coding_account(
+                            st.session_state.user_id,
+                            coding_id,
+                            platform,
+                        )
+                    st.success(result["message"])
+                    st.rerun()
+                except requests.RequestException:
+                    st.error(
+                        "Could not reach the coding platform right now. "
+                        "Check your internet connection and try again."
+                    )
+                except Exception as exc:
+                    st.error(str(exc))
 
-        grouped["Status"] = grouped["Accuracy"].apply(language_status)
+    totals = coding_current_totals(st.session_state.user_id)
+    cdf = coding_df(st.session_state.user_id)
 
-        st.subheader("📊 Language Performance")
-        st.dataframe(grouped, use_container_width=True, hide_index=True)
+    if totals["platform"]:
+        solve_rate = (
+            round(totals["solved"] / totals["attempted"] * 100, 1)
+            if totals["attempted"] else 0
+        )
+        a, b, c, d, e = st.columns(5)
+        a.metric("Programs Solved", totals["solved"])
+        b.metric("Submissions", totals["attempted"])
+        c.metric("Solve Rate", f"{solve_rate}%")
+        d.metric("Easy / Med / Hard",
+                 f"{totals['easy']} / {totals['medium']} / {totals['hard']}")
+        e.metric("Sync Snapshots", len(coding_snapshots_df(st.session_state.user_id)))
 
-        st.subheader("🎯 Your Coding Strength")
-        for _, row in grouped.sort_values("Accuracy", ascending=False).iterrows():
-            st.write(f"**{row['language']}** — {row['Accuracy']:.0f}% — {row['Status']}")
-            st.progress(float(row["Accuracy"]) / 100)
+        if not cdf.empty:
+            st.subheader("📅 Activity Tracked by Date")
+            daily = cdf.groupby("log_date", as_index=False).agg(
+                solved=("solved", "sum"),
+                attempted=("attempted", "sum"),
+            )
+            st.plotly_chart(
+                px.bar(
+                    daily,
+                    x="log_date",
+                    y="solved",
+                    title="New Programs Solved Between Syncs",
+                    labels={"log_date": "Date", "solved": "New Solved"},
+                ),
+                use_container_width=True,
+            )
 
-        st.subheader("📈 Problems Solved by Language")
-        st.bar_chart(grouped.set_index("language")["Solved"])
+            st.subheader("🧠 Language Skill")
+            lang = (
+                cdf.groupby("language", as_index=False)
+                .agg(
+                    attempted=("attempted", "sum"),
+                    solved=("solved", "sum"),
+                )
+            )
+            lang["skill"] = (
+                lang["solved"] / lang["attempted"].replace(0, 1) * 100
+            ).round(1)
+            # If only solved-language totals are available (LeetCode), treat
+            # those languages as strong by coverage rather than inventing
+            # failed attempts.
+            lang.loc[lang["attempted"] == lang["solved"], "skill"] = 100.0
+            lang["status"] = lang["skill"].apply(
+                lambda x: "🟢 Strong" if x >= 80
+                else ("🟡 OK" if x >= 50 else "🔴 Weak")
+            )
+            st.dataframe(lang, use_container_width=True, hide_index=True)
+
+            st.plotly_chart(
+                px.bar(
+                    lang,
+                    x="language",
+                    y="skill",
+                    range_y=[0, 100],
+                    title="Language Skill Analysis",
+                    labels={"skill": "Skill (%)"},
+                ),
+                use_container_width=True,
+            )
+
+            st.info(
+                "Skill is estimated from automatically synced activity. "
+                "It becomes more meaningful after multiple snapshots."
+            )
+        else:
+            st.info(
+                "This is the first snapshot. Sync again on later days to build "
+                "date-wise improvement graphs."
+            )
+    else:
+        st.info(
+            "Go to Settings → Profile, select Codeforces or LeetCode, and enter "
+            "your coding user ID. Then return here and press Sync."
+        )
 
 # ============================================================
 # STRESS MONITOR
 # ============================================================
 elif st.session_state.page == "Stress Monitor":
     st.title("😌 Stress Monitor")
-    st.caption("Wellbeing tracker for study planning; it is not a medical assessment.")
 
-    current = int(stress_df().iloc[0]["level"]) if not stress_df().empty else 5
-    level = st.slider("Current stress level", 1, 10, current)
-    note = st.text_input("Optional note", placeholder="e.g. exam tomorrow, slept late")
+    level = st.slider("Current stress level", 1, 10, 5)
+    note = st.text_input("Optional note")
 
-    if st.button("💾 Save Stress Level", use_container_width=True):
+    if st.button("💾 Record Stress"):
         save_stress(st.session_state.user_id, level, note)
-        st.success("Stress level recorded.")
-        st.rerun()
+        st.success("Stress recorded.")
 
     if level <= 3:
-        st.success("😌 Low stress — good for focused study.")
+        st.success("🟢 Low stress — good for focused study.")
     elif level <= 6:
-        st.warning("🙂 Moderate stress — use shorter sessions and breaks.")
+        st.warning("🟡 Moderate stress — use shorter focused sessions.")
     else:
-        st.error("😰 High stress — reduce workload and take a proper break.")
+        st.error("🔴 High stress — take a break before continuing.")
 
-    df = stress_df()
-    if not df.empty:
-        chart = df.head(14).copy()
-        chart["date"] = pd.to_datetime(chart["logged_at"]).dt.strftime("%d %b")
-        st.line_chart(chart.set_index("date")["level"])
+    sdf = stress_df(st.session_state.user_id)
+    if not sdf.empty:
+        fig = px.line(
+            sdf,
+            x="logged_at",
+            y="level",
+            markers=True,
+            range_y=[0, 10],
+            title="Stress Trend",
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
 # ============================================================
 # PUZZLE ZONE
 # ============================================================
 elif st.session_state.page == "Puzzle Zone":
     st.title("🧩 Puzzle Zone")
-    st.caption("Puzzles are tracked by ID. A solved/attempted puzzle is not shown again.")
+    st.caption("Sudoku, Arrow Memory, Snake and Dinosaur games.")
 
-    used = used_puzzle_ids()
-    available = [p for p in PUZZLES if p["id"] not in used]
+    used = used_puzzles(st.session_state.user_id)
+    fresh = [p for p in PUZZLES if p[0] not in used]
 
-    if not available:
-        st.success("🎉 You have completed the entire puzzle bank. Add more puzzles for a new set.")
+    if not fresh:
+        st.success(
+            "🎉 You have completed every puzzle currently in the bank. "
+            "No puzzle will be silently repeated."
+        )
     else:
-        if "active_puzzle_id" not in st.session_state or st.session_state.active_puzzle_id not in [p["id"] for p in available]:
-            st.session_state.active_puzzle_id = random.choice(available)["id"]
+        if st.session_state.selected_puzzle is None:
+            p = random.choice(fresh)
+            st.session_state.selected_puzzle = p
+        else:
+            p = st.session_state.selected_puzzle
+            if p[0] in used:
+                st.session_state.selected_puzzle = random.choice(fresh)
+                p = st.session_state.selected_puzzle
 
-        puzzle = next(p for p in available if p["id"] == st.session_state.active_puzzle_id)
-        st.markdown(f"### {puzzle['title']}")
-        st.write(puzzle["question"])
+        puzzle_id, ptype, title, description = p
+        st.subheader(f"{title} — {ptype}")
+        st.write(description)
 
-        answer = st.text_input("Your answer", key=f"puzzle_answer_{puzzle['id']}")
-        a,b = st.columns(2)
-        if a.button("✅ Check Answer", use_container_width=True):
-            correct = answer.strip().lower() == puzzle["answer"].strip().lower()
-            save_puzzle(st.session_state.user_id, puzzle["id"], int(correct))
-            if correct:
-                st.success("🎉 Correct! This puzzle is now permanently marked as used.")
+        # Sudoku: simple playable 4x4 board
+        if ptype == "Sudoku":
+            solution = [[1, 2, 3, 4], [3, 4, 1, 2], [2, 1, 4, 3], [4, 3, 2, 1]]
+            givens = {(0, 0): 1, (0, 3): 4, (1, 1): 4, (2, 2): 4, (3, 0): 4}
+            st.write("Fill the blank cells with numbers 1–4.")
+            grid = []
+            for r in range(4):
+                cols = st.columns(4)
+                row = []
+                for c in range(4):
+                    if (r, c) in givens:
+                        cols[c].number_input(
+                            f"r{r+1}c{c+1}", value=givens[(r, c)],
+                            min_value=1, max_value=4, disabled=True,
+                            key=f"{puzzle_id}_{r}_{c}_g"
+                        )
+                        row.append(givens[(r, c)])
+                    else:
+                        value = cols[c].number_input(
+                            f"r{r+1}c{c+1}", min_value=1, max_value=4, value=1,
+                            key=f"{puzzle_id}_{r}_{c}"
+                        )
+                        row.append(value)
+                grid.append(row)
+
+            if st.button("Check Sudoku"):
+                if grid == solution:
+                    record_puzzle(st.session_state.user_id, puzzle_id, ptype, 100)
+                    st.success("🎉 Sudoku solved!")
+                    st.session_state.selected_puzzle = None
+                    st.rerun()
+                else:
+                    st.error("Not correct yet. Check rows and columns.")
+
+        # Arrow memory: playable sequence memory
+        elif ptype == "Arrows":
+            arrows = ["U", "D", "L", "R"]
+            if "arrow_sequence" not in st.session_state:
+                st.session_state.arrow_sequence = [
+                    random.choice(arrows) for _ in range(4)
+                ]
+                st.session_state.show_arrows = True
+
+            if st.session_state.show_arrows:
+                st.info(
+                    "Memorize this sequence: "
+                    + "  ".join(st.session_state.arrow_sequence)
+                )
+                if st.button("Hide Sequence"):
+                    st.session_state.show_arrows = False
+                    st.rerun()
             else:
-                st.error(f"Not correct. Correct answer: **{puzzle['answer']}**")
-            st.session_state.active_puzzle_id = None
-            st.rerun()
+                user_sequence = st.text_input(
+                    "Enter the sequence in order (example: U D L R)",
+                    key=f"arrow_answer_{puzzle_id}",
+                )
+                if st.button("Check Arrow Game"):
+                    entered = [x.strip().upper() for x in user_sequence.split()]
+                    if entered == st.session_state.arrow_sequence:
+                        record_puzzle(
+                            st.session_state.user_id, puzzle_id, ptype, 100
+                        )
+                        st.success("🎉 Correct arrow sequence!")
+                        st.session_state.selected_puzzle = None
+                        st.session_state.pop("arrow_sequence", None)
+                        st.session_state.pop("show_arrows", None)
+                        st.rerun()
+                    else:
+                        st.error("❌ Incorrect sequence. This puzzle remains available to retry.")
 
-        if b.button("➡️ Skip Puzzle", use_container_width=True):
-            save_puzzle(st.session_state.user_id, puzzle["id"], 0)
-            st.session_state.active_puzzle_id = None
-            st.rerun()
+                if st.button("New Arrow Round"):
+                    st.session_state.arrow_sequence = [
+                        random.choice(arrows) for _ in range(4)
+                    ]
+                    st.session_state.show_arrows = True
+                    st.rerun()
 
-    pdf = puzzle_df()
-    solved = int(pdf["solved"].sum()) if not pdf.empty else 0
-    st.metric("🧩 Puzzles completed/attempted", len(pdf))
-    st.metric("🏆 Solved", solved)
+        # Snake and Dinosaur: actual browser mini-games
+        elif ptype in ("Snake", "Dinosaur"):
+            if ptype == "Snake":
+                html = """
+                <div style="font-family:Arial;text-align:center">
+                <canvas id="game" width="360" height="240" style="border:2px solid #333"></canvas>
+                <p>Use arrow keys. Eat the red food. Press Enter to restart.</p>
+                </div>
+                <script>
+                const c=document.getElementById("game"),x=c.getContext("2d");
+                let s=[{x:10,y:10}],d={x:1,y:0},f={x:15,y:10},score=0;
+                document.addEventListener("keydown",e=>{
+                  if(e.key==="ArrowUp"&&d.y===0)d={x:0,y:-1};
+                  if(e.key==="ArrowDown"&&d.y===0)d={x:0,y:1};
+                  if(e.key==="ArrowLeft"&&d.x===0)d={x:-1,y:0};
+                  if(e.key==="ArrowRight"&&d.x===0)d={x:1,y:0};
+                  if(e.key==="Enter"){s=[{x:10,y:10}];d={x:1,y:0};score=0;}
+                });
+                setInterval(()=>{
+                  let h={x:s[0].x+d.x,y:s[0].y+d.y};
+                  if(h.x<0||h.y<0||h.x>=30||h.y>=20||s.some(z=>z.x===h.x&&z.y===h.y)){
+                    s=[{x:10,y:10}];d={x:1,y:0};score=0;return;
+                  }
+                  s.unshift(h);
+                  if(h.x===f.x&&h.y===f.y){score++;f={x:Math.floor(Math.random()*30),y:Math.floor(Math.random()*20)}}
+                  else s.pop();
+                  x.clearRect(0,0,360,240);x.fillStyle="#39a852";s.forEach(z=>x.fillRect(z.x*12,z.y*12,11,11));
+                  x.fillStyle="#e33";x.fillRect(f.x*12,f.y*12,11,11);x.fillStyle="#111";x.fillText("Score: "+score,8,232);
+                },110);
+                </script>
+                """
+            else:
+                html = """
+                <div style="font-family:Arial;text-align:center">
+                <canvas id="dino" width="500" height="180" style="border:2px solid #333"></canvas>
+                <p>Press Space to jump. Avoid the cactus. Press Enter to restart.</p>
+                </div>
+                <script>
+                const c=document.getElementById("dino"),x=c.getContext("2d");
+                let py=130,vy=0,obs=500,score=0,alive=true;
+                document.addEventListener("keydown",e=>{
+                  if(e.code==="Space"&&py>=130){vy=-11}
+                  if(e.key==="Enter"){py=130;vy=0;obs=500;score=0;alive=true}
+                });
+                setInterval(()=>{
+                  if(!alive)return;
+                  vy+=0.6;py+=vy;if(py>130){py=130;vy=0}
+                  obs-=6;if(obs<0){obs=500+Math.random()*160;score++}
+                  if(obs<60&&obs>25&&py>105){alive=false}
+                  x.clearRect(0,0,500,180);x.fillStyle="#444";x.fillRect(0,150,500,3);
+                  x.fillStyle="#222";x.fillRect(50,py,30,20);
+                  x.fillStyle="#3a3";x.fillRect(obs,125,12,25);
+                  x.fillStyle="#111";x.fillText("Score: "+score+(alive?"":"  GAME OVER"),10,20);
+                },30);
+                </script>
+                """
+            components.html(html, height=250)
+            st.info("When you finish the game, record this puzzle as completed so MindMate will not select it again.")
+            game_score = st.number_input(
+                "Your game score",
+                min_value=0,
+                max_value=10000,
+                value=0,
+                step=1,
+                key=f"game_score_{puzzle_id}",
+            )
+            if st.button("✅ Finish & Record This Game", key=f"finish_{puzzle_id}"):
+                record_puzzle(
+                    st.session_state.user_id,
+                    puzzle_id,
+                    ptype,
+                    float(game_score),
+                )
+                st.session_state.selected_puzzle = None
+                st.success("Puzzle recorded. It will not be selected again for you.")
+                st.rerun()
+
+        if st.button("➡️ Next New Puzzle"):
+            st.session_state.selected_puzzle = None
+            st.rerun()
 
 # ============================================================
 # ANALYTICS
 # ============================================================
 elif st.session_state.page == "Analytics":
     st.title("📊 Analytics")
-    st.caption("Real activity from study sessions, quizzes, coding and stress logs.")
+    st.caption("Current MindMate performance — no previous-semester data required.")
 
-    sdf = study_df()
-    qdf = quiz_df()
-    cdf = coding_df()
-    rdf = stress_df()
+    sdf = study_df(st.session_state.user_id)
+    qdf = quiz_df(st.session_state.user_id)
+    cdf = coding_df(st.session_state.user_id)
+    stress = stress_df(st.session_state.user_id)
 
-    study_minutes = int(sdf["minutes"].sum()) if not sdf.empty else 0
-    quiz_avg = float(qdf["score_percent"].mean()) if not qdf.empty else 0
-    coding_solved = int(cdf["solved"].sum()) if not cdf.empty else 0
+    total_study = int(sdf["actual_minutes"].sum()) if not sdf.empty else 0
+    quiz_avg = float(qdf["score"].mean()) if not qdf.empty else 0
+    coding_totals = coding_current_totals(st.session_state.user_id)
+    solved = int(coding_totals["solved"])
 
-    a,b,c,d = st.columns(4)
-    a.metric("Study Minutes", study_minutes)
-    b.metric("Quiz Average", f"{quiz_avg:.0f}%")
-    c.metric("Coding Solved", coding_solved)
-    d.metric("Study Streak", f"{study_streak_days()} days")
+    a, b, c = st.columns(3)
+    a.metric("Study Time", f"{total_study} min")
+    b.metric("Quiz Average", f"{quiz_avg:.1f}%")
+    c.metric("Programs Solved", solved)
 
-    st.subheader("🧠 Topic Strength")
-    if qdf.empty:
-        st.info("Complete quizzes to see topic strength.")
+    st.subheader("📈 Weekly Study Improvement")
+    if not sdf.empty:
+        temp = sdf.copy()
+        temp["date"] = temp["started_at"].str[:10]
+        daily = temp.groupby("date")["actual_minutes"].sum().reset_index()
+        daily["date"] = pd.to_datetime(daily["date"])
+        fig = px.line(daily, x="date", y="actual_minutes", markers=True,
+                      title="Study Minutes by Date")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        topic_perf = (
-            qdf.groupby(["subject","topic"], as_index=False)["score_percent"]
-            .mean()
-            .sort_values("score_percent")
-        )
-        topic_perf["Status"] = topic_perf["score_percent"].apply(
-            lambda x: "🟢 Strong" if x >= 80 else ("🟡 OK" if x >= 50 else "🔴 Weak")
-        )
-        topic_perf["score_percent"] = topic_perf["score_percent"].round(0)
-        st.dataframe(topic_perf, use_container_width=True, hide_index=True)
-        st.bar_chart(topic_perf.set_index("topic")["score_percent"])
+        st.info("Complete study sessions to see this graph.")
 
-    st.subheader("💻 Language Strength")
-    if cdf.empty:
-        st.info("Log coding sessions to see language strength.")
+    st.subheader("📝 Quiz Performance")
+    if not qdf.empty:
+        qtemp = qdf.copy()
+        qtemp["date"] = qtemp["attempted_at"].str[:10]
+        weekly = qtemp.groupby("date")["score"].mean().reset_index()
+        weekly["date"] = pd.to_datetime(weekly["date"])
+        fig = px.bar(weekly, x="date", y="score", range_y=[0, 100],
+                     title="Quiz Marks by Date")
+        st.plotly_chart(fig, use_container_width=True)
+
+        topic = qdf.groupby(["subject", "topic"])["score"].mean().reset_index()
+        topic["label"] = topic["subject"] + " — " + topic["topic"]
+        fig = px.bar(topic.sort_values("score"), x="score", y="label",
+                     orientation="h", range_x=[0, 100],
+                     title="Topic Strength")
+        st.plotly_chart(fig, use_container_width=True)
     else:
-        lang = cdf.groupby("language", as_index=False).agg(
-            Attempted=("attempted","sum"),
-            Solved=("solved","sum"),
-            Minutes=("minutes","sum"),
+        st.info("Take quizzes after study sessions to generate quiz analytics.")
+
+    st.subheader("💻 Coding Skill")
+    if not cdf.empty:
+        lang = cdf.groupby("language").agg(
+            attempted=("attempted", "sum"),
+            solved=("solved", "sum")
+        ).reset_index()
+        lang["skill"] = lang["solved"] / lang["attempted"].replace(0, 1) * 100
+        lang["status"] = lang["skill"].apply(
+            lambda x: "Strong" if x >= 80 else ("OK" if x >= 50 else "Weak")
         )
-        lang["Accuracy"] = (lang["Solved"] / lang["Attempted"] * 100).round(0)
-        lang["Status"] = lang["Accuracy"].apply(
-            lambda x: "🟢 Strong" if x >= 80 else ("🟡 OK" if x >= 50 else "🔴 Weak")
-        )
+        fig = px.bar(lang, x="language", y="skill", range_y=[0, 100],
+                     title="Language Strength")
+        st.plotly_chart(fig, use_container_width=True)
         st.dataframe(lang, use_container_width=True, hide_index=True)
 
     st.subheader("😌 Stress Trend")
-    if rdf.empty:
-        st.info("Record stress levels to see the trend.")
-    else:
-        chart = rdf.copy()
-        chart["date"] = pd.to_datetime(chart["logged_at"]).dt.strftime("%d %b %H:%M")
-        st.line_chart(chart.head(20).set_index("date")["level"])
+    if not stress.empty:
+        fig = px.line(stress, x="logged_at", y="level", markers=True,
+                      range_y=[0, 10], title="Stress Level Over Time")
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Current marks are quiz marks. There is no previous-semester CGPA/marks.
+    st.subheader("🎓 Current Performance Summary")
+    summary = pd.DataFrame(
+        {
+            "Metric": ["Study time", "Quiz average", "Programs solved", "Quiz attempts"],
+            "Value": [
+                f"{total_study} min",
+                f"{quiz_avg:.1f}%",
+                solved,
+                len(qdf),
+            ],
+        }
+    )
+    st.dataframe(summary, use_container_width=True, hide_index=True)
 
 # ============================================================
 # SETTINGS
 # ============================================================
 elif st.session_state.page == "Settings":
     st.title("⚙️ Settings")
-    st.caption("Configure your semester subjects, exam date and study preferences.")
+    st.caption("You control your semester subjects, topics, exams and coding identity. Coding counts are fetched from the selected platform; they are never entered manually.")
 
-    st.subheader("🎓 Semester Subjects")
-    st.write("Select only the subjects you actually have this semester.")
-    selected_subjects = st.multiselect(
-        "My subjects",
-        ALL_SUBJECTS,
-        default=st.session_state.subjects,
+    tab_profile, tab_subjects, tab_exams, tab_questions = st.tabs(
+        ["👤 Profile", "📚 Semester Subjects", "🗓️ Exam Schedule", "📝 Question Bank"]
     )
 
-    st.subheader("📅 Exam")
-    exam_date = st.date_input(
-        "Next exam date",
-        value=dt.date.fromisoformat(st.session_state.exam_date),
-    )
+    with tab_profile:
+        coding_id, platform, semester = profile(st.session_state.user_id)
+        st.write(f"**Account:** {st.session_state.username}")
+        st.write(f"**Name:** {st.session_state.name}")
 
-    if st.button("💾 Save Semester Settings", use_container_width=True):
-        if not selected_subjects:
-            st.error("Select at least one subject.")
+        new_semester = st.text_input("Semester", value=semester)
+        new_coding_id = st.text_input("Coding User ID", value=coding_id)
+        new_platform = st.selectbox(
+            "Coding Platform",
+            ["Codeforces", "LeetCode"],
+            index=["Codeforces", "LeetCode"].index(platform)
+            if platform in ["Codeforces", "LeetCode"] else 0,
+        )
+
+        if st.button("💾 Save Profile"):
+            save_profile(st.session_state.user_id, new_coding_id, new_platform, new_semester)
+            st.success("Profile saved.")
+
+    with tab_subjects:
+        st.subheader("Your Semester Subjects")
+        subjects = user_subjects(st.session_state.user_id)
+
+        with st.form("add_subject"):
+            new_subject = st.text_input("Enter your subject name")
+            if st.form_submit_button("➕ Add Subject"):
+                add_subject(st.session_state.user_id, new_subject)
+                st.rerun()
+
+        for subject in subjects:
+            cols = st.columns([3, 2, 1])
+            cols[0].write(f"📘 {subject}")
+            topics = user_topics(st.session_state.user_id, subject)
+            cols[1].write(f"{len(topics)} topic(s)")
+            if cols[2].button("Remove", key=f"remove_sub_{subject}"):
+                remove_subject(st.session_state.user_id, subject)
+                st.rerun()
+
+        if subjects:
+            st.subheader("Add Topic to a Subject")
+            selected_subject = st.selectbox("Subject", subjects)
+            new_topic = st.text_input("Topic name")
+            if st.button("➕ Add Topic"):
+                add_topic(st.session_state.user_id, selected_subject, new_topic)
+                st.success("Topic added.")
+
+    with tab_exams:
+        subjects = user_subjects(st.session_state.user_id)
+        if not subjects:
+            st.info("Add subjects first.")
         else:
-            st.session_state.subjects = selected_subjects
-            st.session_state.exam_date = exam_date.isoformat()
-            save_preferences(
-                st.session_state.user_id,
-                selected_subjects,
-                exam_date.isoformat(),
-            )
-            st.success("Semester subjects and exam date saved.")
+            with st.form("exam_form"):
+                exam_subject = st.selectbox("Exam subject", subjects)
+                exam_date = st.date_input("Exam date", date.today())
+                exam_time = st.time_input("Exam time", datetime.now().time().replace(second=0, microsecond=0))
+                if st.form_submit_button("➕ Add Exam"):
+                    save_exam(
+                        st.session_state.user_id,
+                        exam_subject,
+                        exam_date,
+                        exam_time.strftime("%H:%M"),
+                    )
+                    st.success("Exam schedule saved.")
 
-    st.divider()
-    st.subheader("📚 Available Subject Bank")
-    st.write(", ".join(ALL_SUBJECTS))
-    st.caption("Each subject has topic-wise quiz questions. You can extend QUESTION_BANK later without changing the application flow.")
+        edf = exams_df(st.session_state.user_id)
+        if not edf.empty:
+            st.dataframe(edf, use_container_width=True, hide_index=True)
+            for _, row in edf.iterrows():
+                if st.button(
+                    f"Delete {row['subject']} — {row['exam_date']} {row['exam_time']}",
+                    key=f"del_exam_{row['id']}",
+                ):
+                    delete_exam(st.session_state.user_id, int(row["id"]))
+                    st.rerun()
 
-    st.divider()
-    st.subheader("🗓️ Subject Slotting")
-    st.caption("Create a simple weekly timetable for your semester subjects.")
+    with tab_questions:
+        st.subheader("Add Your Own Quiz Questions")
+        subjects = user_subjects(st.session_state.user_id)
+        if not subjects:
+            st.info("Add semester subjects first.")
+        else:
+            with st.form("question_form"):
+                qs = st.selectbox("Subject", subjects)
+                qt = st.text_input("Topic")
+                qq = st.text_area("Question")
+                o1 = st.text_input("Option 1")
+                o2 = st.text_input("Option 2")
+                o3 = st.text_input("Option 3")
+                o4 = st.text_input("Option 4")
+                correct = st.selectbox("Correct answer", [o1, o2, o3, o4])
+                difficulty = st.selectbox("Difficulty", ["Easy", "Medium", "Hard"])
 
-    day = st.selectbox(
-        "Day",
-        ["Monday","Tuesday","Wednesday","Thursday","Friday","Saturday","Sunday"],
-    )
-    time_slot = st.selectbox(
-        "Time",
-        ["08:00","09:00","10:00","11:00","12:00","14:00","15:00","16:00","17:00","18:00","19:00"],
-    )
-    slot_subject = st.selectbox("Subject", st.session_state.subjects)
-
-    if st.button("➕ Add Subject Slot", use_container_width=True):
-        save_slot(st.session_state.user_id, day, time_slot, slot_subject)
-        st.success(f"Added {slot_subject} on {day} at {time_slot}.")
-        st.rerun()
-
-    slots = slots_df()
-    if not slots.empty:
-        st.dataframe(slots, use_container_width=True, hide_index=True)
-
-    st.subheader("🔐 Account")
-    st.write(f"Logged in as **{st.session_state.username}**")
+                if st.form_submit_button("➕ Add Question"):
+                    options = [o1, o2, o3, o4]
+                    if not qt.strip() or not qq.strip() or any(not x.strip() for x in options):
+                        st.error("Complete the subject, topic, question and all four options.")
+                    elif correct not in options:
+                        st.error("Select a valid correct answer.")
+                    else:
+                        insert_custom_question(
+                            qs, qt.strip(), qq.strip(), options, correct, difficulty
+                        )
+                        add_topic(st.session_state.user_id, qs, qt.strip())
+                        st.success(
+                            "Question added. Its unique ID will prevent it being repeated "
+                            "for this student/topic."
+                        )
 
 # ============================================================
 # FOOTER
 # ============================================================
 st.divider()
-st.caption("MindMate • Study → Timer → Unique Quiz → Analyze → Improve")
+st.caption(
+    "MindMate • Study Focus → Quiz → Analysis → Coding Skill → Tomorrow's Plan"
+)
