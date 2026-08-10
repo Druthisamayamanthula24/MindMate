@@ -7,7 +7,14 @@ import os
 import hashlib
 import json
 import time
-import google.generativeai as genai
+
+# Try to import Gemini, but handle if not installed
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+    genai = None
 
 # =========================================================
 # MINDMATE - Smart Semester Study Planner & Analyzer
@@ -183,6 +190,10 @@ st.markdown("""
     background: #f8d7da;
     color: #721c24;
 }
+.bot-warning {
+    background: #fff3cd;
+    color: #856404;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -318,7 +329,8 @@ def init_state():
         "chat_history": [],
         "gemini_api_key": "",
         "bot_available": False,
-        "feed_filter": "All"
+        "feed_filter": "All",
+        "bot_model": None
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -333,7 +345,7 @@ CODING_LANGUAGES = ["Python", "C++", "Java", "JavaScript", "Go", "Rust", "C#", "
 CODING_DIFFICULTIES = ["Easy", "Medium", "Hard"]
 TECHNIQUES = ["Pomodoro", "Active Recall", "Practice Problems", "Mind Mapping", "Feynman Technique", "Spaced Repetition"]
 
-# Extended question bank
+# Question banks
 TOPIC_BANK = {
     "Python": [
         ("Which keyword defines a function in Python?", ["func", "def", "function", "define"], 1),
@@ -379,7 +391,7 @@ GENERIC_QUESTIONS = [
     ("Which skill is essential for effective learning?", ["Time management", "Social media", "Watching videos", "Skipping topics"], 0),
 ]
 
-# Sudoku Puzzles (10 unique)
+# Sudoku Puzzles
 SUDOKU_PUZZLES = [
     [
         [5,3,0,0,7,0,0,0,0],
@@ -405,7 +417,7 @@ SUDOKU_PUZZLES = [
     ],
 ]
 
-# Arrow Puzzles (10 unique)
+# Arrow Puzzles
 ARROW_PUZZLES = []
 for _ in range(10):
     directions = ['↑', '→', '↓', '←']
@@ -430,15 +442,18 @@ for _ in range(10):
 # --------------------- HELPERS ----------------------------
 def add_to_feed(activity_type, description, details=""):
     """Add activity to feed"""
-    new_entry = pd.DataFrame([{
-        "timestamp": pd.Timestamp.now(),
-        "activity_type": activity_type,
-        "description": description,
-        "details": details,
-        "user": st.session_state.username
-    }])
-    st.session_state.activity_feed = pd.concat([st.session_state.activity_feed, new_entry], ignore_index=True)
-    save_all()
+    try:
+        new_entry = pd.DataFrame([{
+            "timestamp": pd.Timestamp.now(),
+            "activity_type": activity_type,
+            "description": description,
+            "details": details,
+            "user": st.session_state.username
+        }])
+        st.session_state.activity_feed = pd.concat([st.session_state.activity_feed, new_entry], ignore_index=True)
+        save_all()
+    except:
+        pass
 
 def get_topic_for_subject(subject):
     aliases = {
@@ -668,21 +683,27 @@ def generate_smart_daily_plan():
 # --------------------- GEMINI AI CHATBOT --------------------
 def setup_gemini(api_key):
     """Setup Gemini AI with API key"""
+    if not GEMINI_AVAILABLE:
+        return None, "Google Generative AI package not installed. Run: pip install google-generativeai"
+    
     try:
         genai.configure(api_key=api_key)
         model = genai.GenerativeModel('gemini-pro')
         st.session_state.bot_available = True
-        return model
+        return model, "Success"
     except Exception as e:
-        st.error(f"Error setting up Gemini: {e}")
         st.session_state.bot_available = False
-        return None
+        return None, f"Error: {str(e)}"
 
 def get_bot_response(prompt, model, context=""):
     """Get response from Gemini AI"""
+    if not GEMINI_AVAILABLE or model is None:
+        return "⚠️ AI Assistant is not available. Please install the required package: pip install google-generativeai"
+    
     try:
         full_prompt = f"""You are MindMate, an AI study assistant helping students with their academic queries. 
-        Context: {context}
+        Context about the student: {context}
+        
         Student Question: {prompt}
         
         Please provide a helpful, clear, and educational response. If you don't know something, be honest about it."""
@@ -694,6 +715,17 @@ def get_bot_response(prompt, model, context=""):
 
 def show_chatbot():
     st.markdown("### 🤖 MindMate AI Assistant")
+    
+    # Check if Gemini is available
+    if not GEMINI_AVAILABLE:
+        st.warning("""
+        ⚠️ **Google Generative AI package not installed!**
+        
+        To use the AI Assistant, please install the required package:
+        ```bash
+        pip install google-generativeai
+        ```
+        """)
     
     # API Key Setup
     with st.expander("⚙️ Setup AI Assistant (Gemini)", expanded=not st.session_state.gemini_api_key):
@@ -707,11 +739,13 @@ def show_chatbot():
         if st.button("🔑 Connect AI Assistant"):
             if api_key:
                 st.session_state.gemini_api_key = api_key
-                model = setup_gemini(api_key)
+                model, status = setup_gemini(api_key)
                 if model:
                     st.session_state.bot_model = model
                     st.success("✅ AI Assistant connected successfully!")
                     st.rerun()
+                else:
+                    st.error(f"❌ {status}")
             else:
                 st.error("❌ Please enter an API key")
     
@@ -720,8 +754,10 @@ def show_chatbot():
     st.markdown("Ask me anything about your studies, subjects, or general academic questions!")
     
     # Bot status
-    if st.session_state.bot_available:
+    if st.session_state.bot_available and GEMINI_AVAILABLE:
         st.markdown('<span class="bot-status bot-online">🟢 AI Assistant Online</span>', unsafe_allow_html=True)
+    elif not GEMINI_AVAILABLE:
+        st.markdown('<span class="bot-status bot-warning">⚠️ Package not installed</span>', unsafe_allow_html=True)
     else:
         st.markdown('<span class="bot-status bot-offline">🔴 AI Assistant Offline (Set API key above)</span>', unsafe_allow_html=True)
     
@@ -753,7 +789,7 @@ def show_chatbot():
             })
             
             # Get bot response
-            if st.session_state.bot_available:
+            if st.session_state.bot_available and GEMINI_AVAILABLE:
                 with st.spinner("🧠 Thinking..."):
                     # Get context from user's subjects
                     subjects = st.session_state.subjects
@@ -764,7 +800,10 @@ def show_chatbot():
                     response = get_bot_response(user_input, st.session_state.bot_model, context)
             else:
                 # Offline response
-                response = "I'm currently offline. Please set up your Gemini API key in the settings above to get AI-powered responses. For now, try checking your study materials!"
+                if not GEMINI_AVAILABLE:
+                    response = "⚠️ AI Assistant is not available. Please install the required package: `pip install google-generativeai`"
+                else:
+                    response = "I'm currently offline. Please set up your Gemini API key in the settings above to get AI-powered responses. For now, try checking your study materials!"
             
             # Add bot message to chat
             st.session_state.chat_history.append({
@@ -819,36 +858,4 @@ def show_activity_feed():
             feed = feed[feed["activity_type"] == filter_type]
     
     # Sort by time (newest first)
-    feed = feed.sort_values("timestamp", ascending=False)
-    
-    # Display feed items
-    with st.container():
-        for _, item in feed.iterrows():
-            icon_map = {
-                "Subject Added": "📚",
-                "Exam Added": "📅",
-                "Study Session": "⏱️",
-                "Quiz Taken": "📝",
-                "Marks Added": "📊",
-                "Coding Problem": "💻",
-                "Chat": "🤖",
-                "Puzzle Solved": "🧩",
-                "Timetable Added": "📋"
-            }
-            icon = icon_map.get(item["activity_type"], "📌")
-            
-            st.markdown(f"""
-            <div class="feed-item">
-                <div>
-                    <span class="icon">{icon}</span>
-                    <strong>{item['activity_type']}</strong>
-                    <span class="time">• {item['timestamp'].strftime('%I:%M %p, %b %d')}</span>
-                </div>
-                <div>{item['description']}</div>
-                {f"<div style='font-size:12px;color:#666;margin-top:4px;'>{item['details']}</div>" if pd.notna(item['details']) and item['details'] else ""}
-            </div>
-            """, unsafe_allow_html=True)
-    
-    # Clear feed button
-    if st.button("🗑️ Clear Activity Feed", type="secondary"):
-        st.session_state.activity_feed = empty_df("activity_feed")
+    feed = feed.sort_values("timestamp",
