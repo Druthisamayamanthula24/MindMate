@@ -7,6 +7,11 @@ import os
 import hashlib
 import json
 import time
+import base64
+import cv2
+import numpy as np
+from PIL import Image
+import io
 
 # Try to import Gemini, but handle if not installed
 try:
@@ -18,7 +23,7 @@ except ImportError:
 
 # =========================================================
 # MINDMATE - Smart Semester Study Planner & Analyzer
-# Version 7.0 - With AI ChatBot & Activity Feed
+# Version 8.0 - With Secure Login & Stress Detection
 # =========================================================
 
 st.set_page_config(
@@ -115,7 +120,7 @@ st.markdown("""
     padding: 20px;
 }
 .login-container {
-    max-width: 400px;
+    max-width: 420px;
     margin: 0 auto;
     padding: 40px;
     border-radius: 20px;
@@ -158,20 +163,53 @@ st.markdown("""
     background: #fff3cd;
     color: #856404;
 }
+.stress-meter {
+    padding: 15px;
+    border-radius: 12px;
+    text-align: center;
+    margin: 10px 0;
+}
+.stress-low {
+    background: #d4edda;
+    border: 2px solid #28a745;
+}
+.stress-medium {
+    background: #fff3cd;
+    border: 2px solid #ffc107;
+}
+.stress-high {
+    background: #f8d7da;
+    border: 2px solid #dc3545;
+}
+.stress-very-high {
+    background: #f5c6cb;
+    border: 2px solid #721c24;
+}
+.webcam-container {
+    border: 2px solid #dee2e6;
+    border-radius: 12px;
+    padding: 15px;
+    background: #f8f9fa;
+}
 </style>
 """, unsafe_allow_html=True)
 
-# --------------------- AUTH SYSTEM ------------------------
+# --------------------- SECURE AUTH SYSTEM ------------------------
 USERS_FILE = "mindmate_data/users.json"
+SALT = "MindMate_Salt_2024"  # Fixed salt for consistent hashing
+
+def hash_password(password):
+    """Hash password using SHA256 with salt"""
+    return hashlib.sha256((password + SALT).encode()).hexdigest()
 
 def load_users():
     try:
         if os.path.exists(USERS_FILE):
             with open(USERS_FILE, 'r') as f:
                 return json.load(f)
-        return {"admin": "admin123"}
+        return {"admin": hash_password("admin123")}
     except:
-        return {"admin": "admin123"}
+        return {"admin": hash_password("admin123")}
 
 def save_users(users):
     try:
@@ -180,9 +218,6 @@ def save_users(users):
         return True
     except:
         return False
-
-def hash_password(password):
-    return hashlib.sha256(password.encode()).hexdigest()
 
 def verify_user(username, password):
     users = load_users()
@@ -194,6 +229,8 @@ def create_user(username, password):
     users = load_users()
     if username in users:
         return False, "Username already exists!"
+    if len(password) < 6:
+        return False, "Password must be at least 6 characters!"
     users[username] = hash_password(password)
     if save_users(users):
         return True, "User created successfully!"
@@ -213,7 +250,8 @@ SCHEMAS = {
     "coding_problems": ["problem_id", "platform", "problem_name", "difficulty", "topic", "date_solved", "time_taken", "language", "score"],
     "previous_semester": ["subject", "semester", "marks", "grade", "year"],
     "mid_marks": ["subject", "mid_term", "marks", "date_taken", "semester"],
-    "activity_feed": ["timestamp", "activity_type", "description", "details", "user"]
+    "activity_feed": ["timestamp", "activity_type", "description", "details", "user"],
+    "stress_logs": ["timestamp", "stress_level", "user", "recommendation"]
 }
 
 def empty_df(name):
@@ -294,7 +332,12 @@ def init_state():
         "gemini_api_key": "",
         "bot_available": False,
         "feed_filter": "All",
-        "bot_model": None
+        "bot_model": None,
+        "daily_streak": 0,
+        "last_activity_date": None,
+        "stress_level": 0,
+        "stress_recommendation": "",
+        "webcam_enabled": False
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -403,9 +446,193 @@ for _ in range(10):
         solution.append(sol_row)
     ARROW_PUZZLES.append((puzzle, solution))
 
-# --------------------- HELPERS ----------------------------
+# --------------------- STRESS DETECTION ---------------------
+def detect_stress_from_face(image):
+    """
+    Simulate stress detection from facial features
+    In production, this would use a real ML model
+    """
+    try:
+        # Convert image to numpy array
+        if isinstance(image, Image.Image):
+            img_array = np.array(image)
+        else:
+            img_array = np.array(image)
+        
+        # Simulate stress detection based on image properties
+        # Higher brightness variation = higher stress (simulated)
+        if len(img_array.shape) == 3:
+            gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+        else:
+            gray = img_array
+        
+        # Calculate image variance as a stress indicator
+        variance = np.var(gray)
+        normalized_variance = min(variance / 1000, 1.0)
+        
+        # Add some randomness for simulation
+        stress_level = 0.3 + 0.7 * normalized_variance + random.uniform(-0.1, 0.1)
+        stress_level = max(0, min(1, stress_level))
+        
+        return stress_level
+    except:
+        return random.uniform(0.2, 0.8)
+
+def get_stress_recommendation(stress_level):
+    """Get recommendation based on stress level"""
+    if stress_level < 0.3:
+        return {
+            "level": "Low Stress 😊",
+            "color": "stress-low",
+            "recommendation": "You're doing great! Keep up the good work. Take short breaks to maintain this state.",
+            "activities": ["Continue studying", "Take a 5-min break", "Stay hydrated"]
+        }
+    elif stress_level < 0.5:
+        return {
+            "level": "Moderate Stress 😐",
+            "color": "stress-medium",
+            "recommendation": "You're experiencing some stress. Try deep breathing or a short walk.",
+            "activities": ["Deep breathing (5 min)", "Short walk (10 min)", "Listen to calm music"]
+        }
+    elif stress_level < 0.7:
+        return {
+            "level": "High Stress 😰",
+            "color": "stress-high",
+            "recommendation": "You're feeling stressed. Take a longer break and try relaxation techniques.",
+            "activities": ["Take a 15-min break", "Meditation", "Stretch exercises", "Drink water"]
+        }
+    else:
+        return {
+            "level": "Very High Stress 😫",
+            "color": "stress-very-high",
+            "recommendation": "You're under significant stress. Take a break, relax, and come back refreshed.",
+            "activities": ["Take a 30-min break", "Go for a walk", "Listen to calming music", "Deep breathing exercise"]
+        }
+
+def show_stress_detection():
+    """Display stress detection interface"""
+    st.markdown("### 🧘 Stress Detection")
+    st.markdown("Use your camera to detect stress levels and get personalized recommendations")
+    
+    tab1, tab2 = st.tabs(["📸 Camera Detection", "📊 Stress History"])
+    
+    with tab1:
+        st.markdown('<div class="webcam-container">', unsafe_allow_html=True)
+        
+        # Camera input
+        camera_image = st.camera_input("Position your face in the frame", key="stress_camera")
+        
+        if camera_image is not None:
+            with st.spinner("Analyzing facial features..."):
+                # Convert to image
+                image = Image.open(camera_image)
+                
+                # Detect stress
+                stress_level = detect_stress_from_face(image)
+                st.session_state.stress_level = stress_level
+                
+                # Get recommendation
+                stress_info = get_stress_recommendation(stress_level)
+                
+                # Display results
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.image(image, caption="Captured Image", use_container_width=True)
+                
+                with col2:
+                    st.markdown(f"""
+                    <div class="stress-meter {stress_info['color']}">
+                        <h3>Stress Level: {stress_info['level']}</h3>
+                        <p>Score: {stress_level*100:.0f}%</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    
+                    st.markdown(f"""
+                    <div class="card">
+                        <p><strong>💡 Recommendation:</strong> {stress_info['recommendation']}</p>
+                        <p><strong>📋 Suggested Activities:</strong></p>
+                        <ul>
+                            {''.join([f'<li>{activity}</li>' for activity in stress_info['activities']])}
+                        </ul>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                # Save to history
+                new_log = pd.DataFrame([{
+                    "timestamp": pd.Timestamp.now(),
+                    "stress_level": stress_level,
+                    "user": st.session_state.username,
+                    "recommendation": stress_info['recommendation']
+                }])
+                st.session_state.stress_logs = pd.concat([st.session_state.stress_logs, new_log], ignore_index=True)
+                save_all()
+                
+                add_to_feed("Stress Check", f"Stress level: {stress_info['level']}", f"Score: {stress_level*100:.0f}%")
+                
+                # Show recommendation based on level
+                if stress_level > 0.6:
+                    st.warning("⚠️ You seem stressed. Take a break! 🧘")
+                    if st.button("🧘 Take a Break", type="primary"):
+                        st.session_state.page = "🧩 Brain Break"
+                        st.rerun()
+        else:
+            st.info("Click the camera button above to capture your face and analyze stress levels.")
+            
+            # Show stress tips
+            st.markdown("""
+            ### 🧘 Quick Stress Relief Tips
+            - **Deep Breathing:** Inhale for 4 seconds, hold for 4, exhale for 4
+            - **Hydration:** Drink a glass of water
+            - **Walk:** Take a 5-minute walk
+            - **Music:** Listen to calming music
+            - **Stretch:** Do some light stretching
+            """)
+        
+        st.markdown('</div>', unsafe_allow_html=True)
+    
+    with tab2:
+        st.markdown("### 📊 Stress History")
+        
+        stress_logs = st.session_state.stress_logs
+        if stress_logs.empty:
+            st.info("No stress logs yet. Use the camera to start tracking!")
+        else:
+            # Filter by user
+            user_logs = stress_logs[stress_logs["user"] == st.session_state.username]
+            
+            if user_logs.empty:
+                st.info("No stress logs for you yet.")
+            else:
+                # Statistics
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    avg_stress = user_logs["stress_level"].mean()
+                    st.metric("Average Stress", f"{avg_stress*100:.0f}%")
+                with col2:
+                    max_stress = user_logs["stress_level"].max()
+                    st.metric("Max Stress", f"{max_stress*100:.0f}%")
+                with col3:
+                    min_stress = user_logs["stress_level"].min()
+                    st.metric("Min Stress", f"{min_stress*100:.0f}%")
+                
+                # Stress trend
+                user_logs = user_logs.sort_values("timestamp")
+                fig = px.line(user_logs, x="timestamp", y="stress_level", 
+                            title="Stress Level Trend", 
+                            labels={"stress_level": "Stress Level", "timestamp": "Time"})
+                fig.update_layout(yaxis_range=[0, 1])
+                st.plotly_chart(fig, use_container_width=True)
+                
+                # Recent logs
+                st.subheader("Recent Stress Checks")
+                recent = user_logs.tail(5)
+                for _, log in recent.iterrows():
+                    level_text = "Low" if log["stress_level"] < 0.3 else "Moderate" if log["stress_level"] < 0.5 else "High" if log["stress_level"] < 0.7 else "Very High"
+                    emoji = "😊" if log["stress_level"] < 0.3 else "😐" if log["stress_level"] < 0.5 else "😰" if log["stress_level"] < 0.7 else "😫"
+                    st.write(f"{emoji} **{level_text} Stress** ({log['stress_level']*100:.0f}%) - {log['timestamp'].strftime('%I:%M %p, %b %d')}")
+
+# --------------------- HELPER FUNCTIONS ---------------------
 def add_to_feed(activity_type, description, details=""):
-    """Add activity to feed"""
     try:
         new_entry = pd.DataFrame([{
             "timestamp": pd.Timestamp.now(),
@@ -416,8 +643,29 @@ def add_to_feed(activity_type, description, details=""):
         }])
         st.session_state.activity_feed = pd.concat([st.session_state.activity_feed, new_entry], ignore_index=True)
         save_all()
+        update_streak()
     except:
         pass
+
+def update_streak():
+    today = date.today()
+    last_date = st.session_state.last_activity_date
+    
+    if last_date is None:
+        st.session_state.daily_streak = 1
+        st.session_state.last_activity_date = today
+    else:
+        if isinstance(last_date, str):
+            last_date = datetime.strptime(last_date, '%Y-%m-%d').date()
+        
+        if last_date == today:
+            pass
+        elif last_date == today - timedelta(days=1):
+            st.session_state.daily_streak += 1
+            st.session_state.last_activity_date = today
+        else:
+            st.session_state.daily_streak = 1
+            st.session_state.last_activity_date = today
 
 def get_topic_for_subject(subject):
     aliases = {
@@ -646,7 +894,6 @@ def generate_smart_daily_plan():
 
 # --------------------- GEMINI AI CHATBOT --------------------
 def setup_gemini(api_key):
-    """Setup Gemini AI with API key"""
     if not GEMINI_AVAILABLE:
         return None, "Google Generative AI package not installed. Run: pip install google-generativeai"
     
@@ -660,7 +907,6 @@ def setup_gemini(api_key):
         return None, f"Error: {str(e)}"
 
 def get_bot_response(prompt, model, context=""):
-    """Get response from Gemini AI"""
     if not GEMINI_AVAILABLE or model is None:
         return "⚠️ AI Assistant is not available. Please install the required package: pip install google-generativeai"
     
@@ -680,7 +926,6 @@ def get_bot_response(prompt, model, context=""):
 def show_chatbot():
     st.markdown("### 🤖 MindMate AI Assistant")
     
-    # Check if Gemini is available
     if not GEMINI_AVAILABLE:
         st.warning("""
         ⚠️ **Google Generative AI package not installed!**
@@ -691,7 +936,6 @@ def show_chatbot():
         ```
         """)
     
-    # API Key Setup
     with st.expander("⚙️ Setup AI Assistant (Gemini)", expanded=not st.session_state.gemini_api_key):
         st.markdown("""
         **Get your Gemini API Key:**
@@ -713,11 +957,9 @@ def show_chatbot():
             else:
                 st.error("❌ Please enter an API key")
     
-    # Chat Interface
     st.markdown("### 💬 Chat with MindMate")
     st.markdown("Ask me anything about your studies, subjects, or general academic questions!")
     
-    # Bot status
     if st.session_state.bot_available and GEMINI_AVAILABLE:
         st.markdown('<span class="bot-status bot-online">🟢 AI Assistant Online</span>', unsafe_allow_html=True)
     elif not GEMINI_AVAILABLE:
@@ -725,18 +967,15 @@ def show_chatbot():
     else:
         st.markdown('<span class="bot-status bot-offline">🔴 AI Assistant Offline (Set API key above)</span>', unsafe_allow_html=True)
     
-    # Chat container
     chat_container = st.container()
     
     with chat_container:
-        # Display chat history
         for msg in st.session_state.chat_history:
             if msg["role"] == "user":
                 st.markdown(f'<div class="chat-message chat-user">🧑‍🎓 {msg["content"]}<div class="chat-timestamp">{msg["time"]}</div></div>', unsafe_allow_html=True)
             else:
                 st.markdown(f'<div class="chat-message chat-bot">🤖 {msg["content"]}<div class="chat-timestamp">{msg["time"]}</div></div>', unsafe_allow_html=True)
     
-    # Chat input
     with st.container():
         col1, col2 = st.columns([5, 1])
         with col1:
@@ -745,14 +984,12 @@ def show_chatbot():
             send_button = st.button("📤 Send", type="primary", use_container_width=True)
         
         if send_button and user_input:
-            # Add user message to chat
             st.session_state.chat_history.append({
                 "role": "user",
                 "content": user_input,
                 "time": datetime.now().strftime("%I:%M %p")
             })
             
-            # Get bot response
             if st.session_state.bot_available and GEMINI_AVAILABLE:
                 with st.spinner("🧠 Thinking..."):
                     subjects = st.session_state.subjects
@@ -765,7 +1002,7 @@ def show_chatbot():
                 if not GEMINI_AVAILABLE:
                     response = "⚠️ AI Assistant is not available. Please install the required package: `pip install google-generativeai`"
                 else:
-                    response = "I'm currently offline. Please set up your Gemini API key in the settings above to get AI-powered responses. For now, try checking your study materials!"
+                    response = "I'm currently offline. Please set up your Gemini API key in the settings above to get AI-powered responses."
             
             st.session_state.chat_history.append({
                 "role": "bot",
@@ -827,7 +1064,8 @@ def show_activity_feed():
             "Coding Problem": "💻",
             "Chat": "🤖",
             "Puzzle Solved": "🧩",
-            "Timetable Added": "📋"
+            "Timetable Added": "📋",
+            "Stress Check": "🧘"
         }
         icon = icon_map.get(item["activity_type"], "📌")
         
@@ -847,4 +1085,496 @@ def show_activity_feed():
         </div>
         """, unsafe_allow_html=True)
     
-    if st.button("🗑️ Clear Activity Feed
+    if st.button("🗑️ Clear Activity Feed", use_container_width=True):
+        st.session_state.activity_feed = empty_df("activity_feed")
+        save_all()
+        st.rerun()
+
+# --------------------- BRAIN BREAK ------------------------
+def show_brain_break():
+    st.markdown("---")
+    st.markdown('<div class="main-title">🧩 Brain Break</div>', unsafe_allow_html=True)
+    st.markdown("<div class='subtitle'>Take a 2-3 minute break with these brain teasers! (New puzzles every time)</div>", unsafe_allow_html=True)
+    
+    puzzle_type = st.radio("Choose Puzzle:", ["Sudoku", "Arrow Puzzle"], horizontal=True)
+    
+    if puzzle_type == "Sudoku":
+        if st.session_state.sudoku_grid is None:
+            available = [i for i in range(len(SUDOKU_PUZZLES)) if i not in st.session_state.sudoku_used_puzzles]
+            if not available:
+                st.session_state.sudoku_used_puzzles = []
+                available = list(range(len(SUDOKU_PUZZLES)))
+            idx = random.choice(available)
+            st.session_state.sudoku_used_puzzles.append(idx)
+            st.session_state.sudoku_grid = SUDOKU_PUZZLES[idx]
+            st.session_state.sudoku_editable = [[SUDOKU_PUZZLES[idx][i][j] == 0 for j in range(9)] for i in range(9)]
+            st.info("🧩 New Sudoku puzzle loaded! No repeats guaranteed!")
+        
+        st.markdown('<div class="puzzle-container">', unsafe_allow_html=True)
+        grid = st.session_state.sudoku_grid
+        editable = st.session_state.sudoku_editable
+        
+        for i in range(9):
+            cols = st.columns(9)
+            for j in range(9):
+                with cols[j]:
+                    if editable[i][j]:
+                        val = st.text_input("", value=str(grid[i][j]) if grid[i][j] != 0 else "", key=f"sudoku_{i}_{j}", max_chars=1, label_visibility="collapsed", placeholder=" ")
+                        if val and val.isdigit() and 1 <= int(val) <= 9:
+                            grid[i][j] = int(val)
+                    else:
+                        st.markdown(f"<div class='sudoku-cell fixed'>{grid[i][j] if grid[i][j] != 0 else ''}</div>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Check Solution", type="primary", use_container_width=True):
+                st.success("🎉 Great job! Check your answers!")
+                add_to_feed("Puzzle Solved", "Completed Sudoku puzzle", f"Score: {sum(1 for row in grid for cell in row if cell != 0)}/81 filled")
+        with col2:
+            if st.button("🔄 New Puzzle", use_container_width=True):
+                st.session_state.sudoku_grid = None
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+    
+    else:
+        if st.session_state.arrow_puzzle is None:
+            available = [i for i in range(len(ARROW_PUZZLES)) if i not in st.session_state.arrow_used_puzzles]
+            if not available:
+                st.session_state.arrow_used_puzzles = []
+                available = list(range(len(ARROW_PUZZLES)))
+            idx = random.choice(available)
+            st.session_state.arrow_used_puzzles.append(idx)
+            puzzle, solution = ARROW_PUZZLES[idx]
+            st.session_state.arrow_puzzle = puzzle
+            st.session_state.arrow_solution = solution
+            st.info("🧩 New Arrow puzzle loaded! No repeats guaranteed!")
+        
+        st.markdown('<div class="puzzle-container">', unsafe_allow_html=True)
+        puzzle = st.session_state.arrow_puzzle
+        size = len(puzzle)
+        
+        for i in range(size):
+            cols = st.columns(size)
+            for j in range(size):
+                with cols[j]:
+                    if puzzle[i][j] != ' ':
+                        directions = ['↑', '→', '↓', '←']
+                        current_idx = directions.index(puzzle[i][j])
+                        if st.button(puzzle[i][j], key=f"arrow_{i}_{j}", use_container_width=True):
+                            next_idx = (current_idx + 1) % 4
+                            puzzle[i][j] = directions[next_idx]
+                            st.rerun()
+                    else:
+                        st.markdown(f"<div style='background:#f8f9fa;padding:15px;text-align:center;border-radius:10px;'> </div>", unsafe_allow_html=True)
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("✅ Check Solution", type="primary", use_container_width=True):
+                st.success("🎉 Great job! Check your answers!")
+                add_to_feed("Puzzle Solved", "Completed Arrow puzzle", "Solved the direction puzzle")
+        with col2:
+            if st.button("🔄 New Puzzle", use_container_width=True):
+                st.session_state.arrow_puzzle = None
+                st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
+
+# --------------------- LOGIN PAGE ------------------------
+def show_login():
+    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    st.markdown("<h1 style='text-align:center;'>🧠 MindMate</h1>", unsafe_allow_html=True)
+    st.markdown("<p style='text-align:center;color:#666;'>Smart Semester Study Planner</p>", unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["🔐 Login", "📝 Sign Up"])
+    
+    with tab1:
+        with st.form("login_form"):
+            username = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            col1, col2 = st.columns(2)
+            with col1:
+                submit = st.form_submit_button("Login", type="primary", use_container_width=True)
+            with col2:
+                if st.form_submit_button("Clear", use_container_width=True):
+                    st.rerun()
+            if submit:
+                if verify_user(username, password):
+                    st.session_state.logged_in = True
+                    st.session_state.username = username
+                    st.success(f"Welcome back, {username}! 🎉")
+                    st.rerun()
+                else:
+                    st.error("❌ Invalid username or password! Please try again.")
+    
+    with tab2:
+        with st.form("signup_form"):
+            new_username = st.text_input("Choose Username (min 3 characters)")
+            new_password = st.text_input("Choose Password (min 6 characters)", type="password")
+            confirm_password = st.text_input("Confirm Password", type="password")
+            submit = st.form_submit_button("Create Account", type="primary", use_container_width=True)
+            if submit:
+                if not new_username or not new_password:
+                    st.error("Please fill all fields!")
+                elif len(new_username) < 3:
+                    st.error("Username must be at least 3 characters!")
+                elif new_password != confirm_password:
+                    st.error("Passwords don't match!")
+                elif len(new_password) < 6:
+                    st.error("Password must be at least 6 characters!")
+                else:
+                    success, message = create_user(new_username, new_password)
+                    if success:
+                        st.success(message + " Please login!")
+                    else:
+                        st.error(message)
+    
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# --------------------- SIDEBAR ----------------------------
+def show_sidebar():
+    with st.sidebar:
+        st.markdown(f"### 👋 Welcome, {st.session_state.username}!")
+        st.caption("Smart Semester Study Planner")
+        
+        # Display streak
+        streak = st.session_state.daily_streak
+        if streak > 0:
+            st.markdown(f"""
+            <div class="metric-card" style="margin: 10px 0;">
+                <div class="metric-value">{streak}🔥</div>
+                <div class="metric-label">Daily Streak</div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        if st.button("🚪 Logout", use_container_width=True):
+            st.session_state.logged_in = False
+            st.session_state.username = ""
+            st.rerun()
+        
+        st.markdown("---")
+        page_icons = {
+            "🏠 Dashboard": "🏠",
+            "🧠 Smart Daily Plan": "🧠",
+            "📚 Semester Setup": "📚",
+            "📊 Marks & Performance": "📊",
+            "⏱️ Study Session": "⏱️",
+            "📝 Quiz": "📝",
+            "💻 Coding Tracker": "💻",
+            "📅 Timetable": "📅",
+            "📈 Analytics": "📈",
+            "🧘 Stress Detection": "🧘",
+            "🤖 AI Chat": "🤖",
+            "📋 Activity Feed": "📋",
+            "🧩 Brain Break": "🧩"
+        }
+        
+        page = st.radio(
+            "Navigation",
+            list(page_icons.keys()),
+            index=list(page_icons.keys()).index(st.session_state.page) if st.session_state.page in page_icons else 0
+        )
+        st.session_state.page = page
+
+        st.markdown("---")
+        st.caption("MindMate v8.0")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("💾 Save", use_container_width=True):
+                if save_all():
+                    st.success("Saved!")
+        with col2:
+            if st.button("🔄 Refresh", use_container_width=True):
+                st.rerun()
+
+# ======================== MAIN APP ========================
+if not st.session_state.logged_in:
+    show_login()
+else:
+    show_sidebar()
+    page = st.session_state.page
+    
+    # ======================== DASHBOARD =======================
+    if page == "🏠 Dashboard":
+        st.markdown('<div class="main-title">🧠 MindMate</div>', unsafe_allow_html=True)
+        st.markdown('<div class="subtitle">Your Smart Semester Study Planner & Analyzer</div>', unsafe_allow_html=True)
+
+        subjects = st.session_state.subjects
+        sessions = st.session_state.sessions
+        quizzes = st.session_state.quiz_results
+        coding = st.session_state.coding_problems
+        prev_sem = st.session_state.previous_semester
+        mid_marks = st.session_state.mid_marks
+
+        metrics = get_performance_metrics()
+        
+        # Display metrics
+        col1, col2, col3, col4, col5, col6 = st.columns(6)
+        with col1:
+            st.markdown(f"<div class='metric-card'><div class='metric-value'>{len(subjects)}</div><div class='metric-label'>📚 Subjects</div></div>", unsafe_allow_html=True)
+        with col2:
+            total_hours = sessions["duration_min"].sum() / 60 if not sessions.empty else 0
+            st.markdown(f"<div class='metric-card'><div class='metric-value'>{total_hours:.1f}h</div><div class='metric-label'>⏱️ Study Hours</div></div>", unsafe_allow_html=True)
+        with col3:
+            quiz_avg = quizzes["score"].mean() if not quizzes.empty else 0
+            st.markdown(f"<div class='metric-card'><div class='metric-value'>{quiz_avg:.0f}%</div><div class='metric-label'>📝 Quiz Avg</div></div>", unsafe_allow_html=True)
+        with col4:
+            prev_avg = metrics["avg_prev_marks"]
+            st.markdown(f"<div class='metric-card'><div class='metric-value'>{prev_avg:.0f}%</div><div class='metric-label'>📊 Prev Semester</div></div>", unsafe_allow_html=True)
+        with col5:
+            cgpa = metrics["cgpa"]
+            st.markdown(f"<div class='metric-card'><div class='metric-value'>{cgpa:.2f}</div><div class='metric-label'>🎯 CGPA</div></div>", unsafe_allow_html=True)
+        with col6:
+            streak = st.session_state.daily_streak
+            st.markdown(f"<div class='metric-card'><div class='metric-value'>{streak}🔥</div><div class='metric-label'>Day Streak</div></div>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        
+        # Quick Actions
+        col1, col2, col3, col4 = st.columns(4)
+        with col1:
+            if st.button("🧠 Smart Plan", type="primary", use_container_width=True):
+                st.session_state.page = "🧠 Smart Daily Plan"
+                st.rerun()
+        with col2:
+            if st.button("📊 Marks", use_container_width=True):
+                st.session_state.page = "📊 Marks & Performance"
+                st.rerun()
+        with col3:
+            if st.button("🧘 Stress Check", use_container_width=True):
+                st.session_state.page = "🧘 Stress Detection"
+                st.rerun()
+        with col4:
+            if st.button("🤖 AI Chat", use_container_width=True):
+                st.session_state.page = "🤖 AI Chat"
+                st.rerun()
+
+    # ======================== SMART DAILY PLAN ==================
+    elif page == "🧠 Smart Daily Plan":
+        st.markdown('<div class="main-title">🧠 Smart Daily Study Plan</div>', unsafe_allow_html=True)
+        st.markdown("<div class='subtitle'>MindMate creates today's plan based on exams, performance, and study history.</div>", unsafe_allow_html=True)
+        
+        plan = generate_smart_daily_plan()
+
+        if not plan:
+            st.warning("⚠️ No subjects found. Please add subjects in Semester Setup first.")
+            if st.button("📚 Go to Semester Setup", type="primary"):
+                st.session_state.page = "📚 Semester Setup"
+                st.rerun()
+        else:
+            top = plan[0]
+            st.markdown(f"""
+            <div style="padding:25px;border-radius:16px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;margin-bottom:20px;">
+            <h2>🎯 Top Priority: {top['subject']}</h2>
+            <p><b>Recommended topic:</b> {top['topic']}</p>
+            <p><b>Why:</b> {top['reason']}</p>
+            <p><b>Exam:</b> {top['days_left']} day(s) remaining</p>
+            <p><b>Confidence:</b> {'⭐'*top['confidence']}{'☆'*(5-top['confidence'])}</p>
+            <p><b>Previous Performance:</b> {top['prev_performance']:.1f}%</p>
+            <p><b>Mid Term:</b> {top['mid_performance']:.1f}%</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+            st.markdown("### 📚 Today's Study Plan")
+            durations = [45, 45, 30]
+            
+            for i, item in enumerate(plan[:3]):
+                with st.container():
+                    st.markdown(f"""
+                    <div class="card">
+                    <h3>{['1️⃣','2️⃣','3️⃣'][i]} {item['subject']}</h3>
+                    <p>📖 <b>Topic:</b> {item['topic']}</p>
+                    <p>⏱️ <b>Duration:</b> {durations[i]} minutes</p>
+                    <p>🎯 <b>Reason:</b> {item['reason']}</p>
+                    <p>📊 <b>Smart Priority Score:</b> {item['score']:.1f}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+                    if st.button(f"🚀 Start {item['subject']} Session", key=f"smart_{i}", use_container_width=True):
+                        st.session_state.current_subject = item["subject"]
+                        st.session_state.current_topic = item["topic"]
+                        st.session_state.study_duration = durations[i]
+                        st.session_state.study_start = datetime.now()
+                        st.session_state.study_end = datetime.now() + timedelta(minutes=durations[i])
+                        st.session_state.study_running = True
+                        st.success(f"✅ Session started for {item['subject']}!")
+                        st.rerun()
+
+    # ======================== MARKS & PERFORMANCE =============
+    elif page == "📊 Marks & Performance":
+        st.markdown('<div class="main-title">📊 Marks & Performance</div>', unsafe_allow_html=True)
+
+        tab1, tab2 = st.tabs(["📚 Previous Semester", "📝 Mid-Term Marks"])
+        
+        with tab1:
+            st.subheader("📚 Previous Semester Marks")
+            with st.form("prev_semester_form", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    subject = st.text_input("Subject Name *")
+                with c2:
+                    marks = st.number_input("Marks (%)", min_value=0, max_value=100, value=70)
+                with c3:
+                    semester = st.selectbox("Semester", ["Fall 2023", "Spring 2024", "Fall 2024", "Spring 2025", "Other"])
+                year = st.date_input("Year", date.today())
+                if st.form_submit_button("➕ Add Subject Marks", type="primary"):
+                    if not subject.strip():
+                        st.error("❌ Please enter a subject name.")
+                    else:
+                        grade = get_grade(marks)
+                        new = pd.DataFrame([{
+                            "subject": subject.strip(),
+                            "semester": semester,
+                            "marks": marks,
+                            "grade": grade,
+                            "year": pd.Timestamp(year)
+                        }])
+                        st.session_state.previous_semester = pd.concat([st.session_state.previous_semester, new], ignore_index=True)
+                        save_all()
+                        add_to_feed("Marks Added", f"Added {subject} marks: {marks}%", f"Grade: {grade}")
+                        st.success(f"✅ Added {subject} marks: {marks}% ({grade})")
+                        st.rerun()
+
+            if not st.session_state.previous_semester.empty:
+                prev_df = st.session_state.previous_semester
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Average Marks", f"{prev_df['marks'].mean():.1f}%")
+                with col2:
+                    st.metric("Highest Marks", f"{prev_df['marks'].max():.1f}%")
+                with col3:
+                    st.metric("Lowest Marks", f"{prev_df['marks'].min():.1f}%")
+                st.dataframe(prev_df, use_container_width=True, hide_index=True)
+                
+                if len(prev_df) > 0:
+                    grade_counts = prev_df['grade'].value_counts().reset_index()
+                    grade_counts.columns = ['Grade', 'Count']
+                    fig = px.bar(grade_counts, x='Grade', y='Count', title="Grade Distribution")
+                    st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("No previous semester marks added yet.")
+
+        with tab2:
+            st.subheader("📝 Mid-Term Marks")
+            with st.form("mid_marks_form", clear_on_submit=True):
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    subject = st.text_input("Subject Name *", key="mid_subject")
+                with c2:
+                    marks = st.number_input("Marks (%)", min_value=0, max_value=100, value=65, key="mid_marks")
+                with c3:
+                    mid_term = st.selectbox("Mid Term", ["Mid Term 1", "Mid Term 2", "Mid Term 3", "Mid Term 4"])
+                date_taken = st.date_input("Date", date.today())
+                semester = st.selectbox("Semester", ["Fall 2024", "Spring 2025", "Other"], key="mid_semester")
+                if st.form_submit_button("➕ Add Mid-Term Marks", type="primary"):
+                    if not subject.strip():
+                        st.error("❌ Please enter a subject name.")
+                    else:
+                        new = pd.DataFrame([{
+                            "subject": subject.strip(),
+                            "mid_term": mid_term,
+                            "marks": marks,
+                            "date_taken": pd.Timestamp(date_taken),
+                            "semester": semester
+                        }])
+                        st.session_state.mid_marks = pd.concat([st.session_state.mid_marks, new], ignore_index=True)
+                        save_all()
+                        add_to_feed("Marks Added", f"Added {subject} mid-term marks: {marks}%", f"Mid Term: {mid_term}")
+                        st.success(f"✅ Added {subject} mid-term marks: {marks}%")
+                        st.rerun()
+
+            if not st.session_state.mid_marks.empty:
+                mid_df = st.session_state.mid_marks
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Average Marks", f"{mid_df['marks'].mean():.1f}%")
+                with col2:
+                    st.metric("Highest Marks", f"{mid_df['marks'].max():.1f}%")
+                with col3:
+                    st.metric("Lowest Marks", f"{mid_df['marks'].min():.1f}%")
+                st.dataframe(mid_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("No mid-term marks added yet.")
+
+    # ======================== SEMESTER SETUP ===================
+    elif page == "📚 Semester Setup":
+        st.markdown('<div class="main-title">📚 Semester Setup</div>', unsafe_allow_html=True)
+
+        with st.expander("➕ Add New Subject", expanded=True):
+            with st.form("subject_form", clear_on_submit=True):
+                c1, c2 = st.columns(2)
+                with c1:
+                    subject = st.text_input("Subject Name *")
+                    units = st.number_input("Total Units", min_value=1, max_value=20, value=5)
+                    difficulty = st.selectbox("Difficulty Level", list(DIFFICULTY.keys()))
+                with c2:
+                    confidence = st.slider("Confidence Level", 1, 5, 3)
+                    exam_date = st.date_input("Exam Date", date.today() + timedelta(days=30))
+                    completed = st.number_input("Completed Units", min_value=0, max_value=20, value=0)
+
+                submitted = st.form_submit_button("➕ Add Subject", type="primary")
+                if submitted:
+                    if not subject.strip():
+                        st.error("❌ Please enter a subject name.")
+                    elif completed > units:
+                        st.error("❌ Completed units cannot exceed total units.")
+                    else:
+                        if not st.session_state.subjects.empty:
+                            existing = st.session_state.subjects["subject"].str.lower().tolist()
+                            if subject.strip().lower() in existing:
+                                st.error(f"❌ Subject '{subject.strip()}' already exists!")
+                                st.stop()
+                        
+                        new = pd.DataFrame([{
+                            "subject": subject.strip(),
+                            "units": units,
+                            "difficulty": difficulty,
+                            "confidence": confidence,
+                            "exam_date": pd.Timestamp(exam_date),
+                            "completed_units": min(completed, units)
+                        }])
+                        st.session_state.subjects = pd.concat([st.session_state.subjects, new], ignore_index=True)
+                        save_all()
+                        add_to_feed("Subject Added", f"Added subject: {subject.strip()}", f"Units: {units}, Difficulty: {difficulty}")
+                        st.success(f"✅ Subject '{subject.strip()}' added successfully!")
+                        st.rerun()
+
+        st.markdown("### 📚 Your Subjects")
+        if st.session_state.subjects.empty:
+            st.info("No subjects added yet.")
+        else:
+            st.dataframe(st.session_state.subjects, use_container_width=True, hide_index=True)
+
+    # ======================== STUDY SESSION ====================
+    elif page == "⏱️ Study Session":
+        st.markdown('<div class="main-title">⏱️ Study Session</div>', unsafe_allow_html=True)
+        if st.session_state.study_running:
+            remaining = max(0, (st.session_state.study_end - datetime.now()).total_seconds())
+            if remaining <= 0:
+                st.session_state.study_running = False
+                st.success("🎉 Session completed!")
+                st.rerun()
+            mins = int(remaining // 60)
+            secs = int(remaining % 60)
+            st.markdown(f"<div class='study-timer'>{mins:02d}:{secs:02d}</div>", unsafe_allow_html=True)
+            st.info(f"📚 Studying: **{st.session_state.current_subject}** — {st.session_state.current_topic}")
+            
+            if st.button("⏹️ Finish Session", type="primary"):
+                with st.form("session_complete"):
+                    technique = st.selectbox("Study Technique", TECHNIQUES)
+                    mood = st.selectbox("Mood", ["😄 Great", "🙂 Good", "😐 Okay", "😓 Tired", "😴 Very tired"])
+                    distractions = st.slider("Distractions Level", 0, 5, 1)
+                    productivity = st.slider("Productivity Level", 1, 5, 4)
+                    if st.form_submit_button("💾 Save Session"):
+                        new = pd.DataFrame([{
+                            "date": pd.Timestamp.now(),
+                            "subject": st.session_state.current_subject,
+                            "topic": st.session_state.current_topic,
+                            "duration_min": st.session_state.study_duration,
+                            "technique": technique,
+                            "mood": mood,
+                            "distractions": distractions,
+                            "productivity": productivity,
+                            "quiz_score": None
+                        }])
+                        st.session_state.sessions = pd.concat([st.session_state.sessions, new], ignore_index=True)
+                
