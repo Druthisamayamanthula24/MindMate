@@ -5,10 +5,13 @@ from datetime import datetime, date, timedelta
 import random
 import os
 import hashlib
+import json
+import time
+import google.generativeai as genai
 
 # =========================================================
 # MINDMATE - Smart Semester Study Planner & Analyzer
-# Version 4.3 - Complete Working Version
+# Version 7.0 - With AI ChatBot & Activity Feed
 # =========================================================
 
 st.set_page_config(
@@ -59,6 +62,57 @@ st.markdown("""
     font-size: 14px;
     opacity: .9;
 }
+.chat-container {
+    padding: 20px;
+    border-radius: 14px;
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    max-height: 500px;
+    overflow-y: auto;
+}
+.chat-message {
+    padding: 10px 15px;
+    border-radius: 10px;
+    margin: 5px 0;
+    max-width: 80%;
+}
+.chat-user {
+    background: #667eea;
+    color: white;
+    margin-left: auto;
+}
+.chat-bot {
+    background: white;
+    border: 1px solid #dee2e6;
+    margin-right: auto;
+}
+.chat-timestamp {
+    font-size: 10px;
+    color: #999;
+    text-align: right;
+    margin-top: 2px;
+}
+.feed-container {
+    max-height: 600px;
+    overflow-y: auto;
+    padding: 10px;
+}
+.feed-item {
+    padding: 12px;
+    border-radius: 10px;
+    background: white;
+    border-left: 4px solid #667eea;
+    margin-bottom: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+}
+.feed-item .time {
+    font-size: 11px;
+    color: #999;
+}
+.feed-item .icon {
+    font-size: 20px;
+    margin-right: 10px;
+}
 .study-timer {
     text-align: center;
     font-size: 60px;
@@ -66,15 +120,109 @@ st.markdown("""
     font-family: monospace;
     padding: 20px;
 }
-.warning-box {
+.login-container {
+    max-width: 400px;
+    margin: 0 auto;
+    padding: 40px;
+    border-radius: 20px;
+    background: white;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.1);
+}
+.puzzle-container {
     padding: 20px;
+    border-radius: 14px;
+    background: #f8f9fa;
+    border: 2px solid #e9ecef;
+}
+.sudoku-cell {
+    background: white;
+    border: 1px solid #dee2e6;
+    padding: 8px;
+    text-align: center;
+    font-size: 18px;
+    font-weight: 600;
+}
+.sudoku-cell.fixed {
+    background: #e9ecef;
+}
+.arrow-cell {
+    aspect-ratio: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 28px;
+    background: white;
+    border: 2px solid #dee2e6;
     border-radius: 10px;
-    background-color: #fff3cd;
-    border-left: 5px solid #ffc107;
-    margin: 15px 0;
+    cursor: pointer;
+    transition: all 0.3s;
+}
+.arrow-cell:hover {
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+.timer-display {
+    font-size: 48px;
+    font-weight: 700;
+    text-align: center;
+    color: #667eea;
+    font-family: monospace;
+}
+.bot-status {
+    display: inline-block;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+}
+.bot-online {
+    background: #d4edda;
+    color: #155724;
+}
+.bot-offline {
+    background: #f8d7da;
+    color: #721c24;
 }
 </style>
 """, unsafe_allow_html=True)
+
+# --------------------- AUTH SYSTEM ------------------------
+USERS_FILE = "mindmate_data/users.json"
+
+def load_users():
+    try:
+        if os.path.exists(USERS_FILE):
+            with open(USERS_FILE, 'r') as f:
+                return json.load(f)
+        return {"admin": "admin123"}
+    except:
+        return {"admin": "admin123"}
+
+def save_users(users):
+    try:
+        with open(USERS_FILE, 'w') as f:
+            json.dump(users, f)
+        return True
+    except:
+        return False
+
+def hash_password(password):
+    return hashlib.sha256(password.encode()).hexdigest()
+
+def verify_user(username, password):
+    users = load_users()
+    if username in users:
+        return users[username] == hash_password(password)
+    return False
+
+def create_user(username, password):
+    users = load_users()
+    if username in users:
+        return False, "Username already exists!"
+    users[username] = hash_password(password)
+    if save_users(users):
+        return True, "User created successfully!"
+    return False, "Error creating user!"
 
 # --------------------- DATA ------------------------------
 DATA_DIR = "mindmate_data"
@@ -87,7 +235,10 @@ SCHEMAS = {
     "quiz_results": ["date", "subject", "topic", "score", "questions", "attempt_id"],
     "timetable": ["day", "start", "end", "subject"],
     "quiz_attempts": ["attempt_id", "subject", "topic", "attempt_time", "question_hash", "completed"],
-    "coding_problems": ["problem_id", "platform", "problem_name", "difficulty", "topic", "date_solved", "time_taken", "language", "score"]
+    "coding_problems": ["problem_id", "platform", "problem_name", "difficulty", "topic", "date_solved", "time_taken", "language", "score"],
+    "previous_semester": ["subject", "semester", "marks", "grade", "year"],
+    "mid_marks": ["subject", "mid_term", "marks", "date_taken", "semester"],
+    "activity_feed": ["timestamp", "activity_type", "description", "details", "user"]
 }
 
 def empty_df(name):
@@ -102,7 +253,7 @@ def load_df(name):
                 if col not in df.columns:
                     df[col] = None
             df = df[SCHEMAS[name]]
-            for col in ["exam_date", "date", "attempt_time", "date_solved"]:
+            for col in ["exam_date", "date", "attempt_time", "date_solved", "year", "date_taken", "timestamp"]:
                 if col in df.columns:
                     df[col] = pd.to_datetime(df[col], errors="coerce")
             return df
@@ -147,7 +298,27 @@ def init_state():
         "quiz_lock": False,
         "semester_info": {},
         "page": "🏠 Dashboard",
-        "data_initialized": True
+        "data_initialized": True,
+        "logged_in": False,
+        "username": "",
+        "sudoku_grid": None,
+        "sudoku_solution": None,
+        "sudoku_editable": None,
+        "sudoku_used_puzzles": [],
+        "arrow_puzzle": None,
+        "arrow_solution": None,
+        "arrow_used_puzzles": [],
+        "puzzle_start_time": None,
+        "puzzle_type": None,
+        "puzzle_completed": False,
+        "used_quiz_questions": {},
+        "quiz_question_pool": {},
+        "current_semester": "Fall 2024",
+        "show_performance_metrics": True,
+        "chat_history": [],
+        "gemini_api_key": "",
+        "bot_available": False,
+        "feed_filter": "All"
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -162,6 +333,7 @@ CODING_LANGUAGES = ["Python", "C++", "Java", "JavaScript", "Go", "Rust", "C#", "
 CODING_DIFFICULTIES = ["Easy", "Medium", "Hard"]
 TECHNIQUES = ["Pomodoro", "Active Recall", "Practice Problems", "Mind Mapping", "Feynman Technique", "Spaced Repetition"]
 
+# Extended question bank
 TOPIC_BANK = {
     "Python": [
         ("Which keyword defines a function in Python?", ["func", "def", "function", "define"], 1),
@@ -169,76 +341,105 @@ TOPIC_BANK = {
         ("Which symbol starts a comment in Python?", ["//", "#", "/*", "--"], 1),
         ("Which method adds an item to a list?", ["add()", "insertEnd()", "append()", "push()"], 2),
         ("What does len() return?", ["Memory size", "Number of elements", "Last index", "Data type"], 1),
-        ("Which keyword is used for exception handling?", ["try", "check", "catch", "error"], 0),
-        ("Which collection is immutable?", ["list", "set", "dictionary", "tuple"], 3),
-        ("What is the output type of input() by default?", ["int", "float", "str", "bool"], 2),
-        ("Which loop is used for definite iteration?", ["while", "for", "do-while", "until"], 1),
-        ("What is the result of 3 ** 2?", ["6", "9", "8", "5"], 1)
     ],
     "C++": [
         ("Which keyword is used to create a class?", ["object", "class", "structs", "define"], 1),
         ("Which operator accesses members through an object?", [".", "->", "::", "#"], 0),
         ("Which symbol begins a single-line comment?", ["#", "//", "/*", "--"], 1),
         ("Which function is the entry point of a C++ program?", ["start()", "run()", "main()", "execute()"], 2),
-        ("Which concept allows the same function name with different parameters?", ["Inheritance", "Overloading", "Encapsulation", "Abstraction"], 1),
-        ("What is the size of int commonly on a 64-bit system?", ["2", "4", "8", "16"], 1),
-        ("Which keyword is used for dynamic memory allocation?", ["new", "malloc", "alloc", "create"], 0),
-        ("What is the default access specifier in a class?", ["public", "private", "protected", "internal"], 1)
     ],
     "Data Structures": [
         ("Which structure follows LIFO?", ["Queue", "Stack", "Tree", "Graph"], 1),
         ("Which structure follows FIFO?", ["Stack", "Queue", "Heap", "Tree"], 1),
         ("Binary search requires the data to be?", ["Random", "Sorted", "Duplicated", "Hashed"], 1),
         ("Which traversal visits Root, Left, Right?", ["Inorder", "Postorder", "Preorder", "Level only"], 2),
-        ("Which data structure is commonly used for BFS?", ["Stack", "Queue", "Array only", "Set"], 1),
-        ("Average time complexity of binary search?", ["O(n)", "O(log n)", "O(n²)", "O(1) always"], 1),
-        ("Which structure is used for implementing recursion?", ["Queue", "Stack", "Heap", "Array"], 1),
-        ("What is the minimum height order of a binary tree with n nodes?", ["log n", "n", "n/2", "sqrt(n)"], 0)
     ],
     "DBMS": [
         ("Which normal form removes partial dependency?", ["1NF", "2NF", "3NF", "BCNF"], 1),
         ("Which SQL command retrieves data?", ["GET", "SELECT", "FETCHALL", "OPEN"], 1),
         ("A primary key must be?", ["Duplicate", "Nullable", "Unique", "Optional"], 2),
         ("Which command adds rows to a table?", ["INSERT", "ADD", "PUT", "APPEND"], 0),
-        ("Which property means a transaction is all-or-nothing?", ["Consistency", "Atomicity", "Isolation", "Durability"], 1),
-        ("Default order of ORDER BY?", ["Descending", "Ascending", "Random", "None"], 1),
-        ("Which join returns all rows from left table?", ["INNER JOIN", "LEFT JOIN", "RIGHT JOIN", "FULL JOIN"], 1),
-        ("What is the maximum length of VARCHAR in MySQL?", ["255", "65535", "16777215", "No limit"], 1)
     ],
     "Mathematics": [
         ("Derivative of x²?", ["x", "2x", "x²", "2"], 1),
         ("Value of sin(90°)?", ["0", "1", "-1", "Undefined"], 1),
         ("Slope of a horizontal line?", ["1", "0", "Undefined", "-1"], 1),
         ("Determinant of [[a,b],[c,d]]?", ["ab-cd", "ad-bc", "ac-bd", "a+b+c+d"], 1),
-        ("Integral of 1 dx?", ["1", "x", "x²", "0"], 1),
-        ("Derivative of ln(x)?", ["1/x", "x", "x²", "e^x"], 0),
-        ("sin²(x) + cos²(x) equals?", ["0", "1", "2", "sin(x)"], 1),
-        ("Area of a circle?", ["πr", "2πr", "πr²", "πd"], 2)
     ],
     "AI/ML": [
         ("Which is supervised learning?", ["Clustering", "Classification", "PCA", "Association rules"], 1),
         ("Which algorithm can be used for classification and regression?", ["Random Forest", "Apriori only", "K-Means only", "PCA"], 0),
         ("What is overfitting?", ["Model too simple", "Model memorizes training data too closely", "No training", "Missing data"], 1),
         ("Which metric is common for regression?", ["Accuracy", "MAE", "Precision", "Recall"], 1),
-        ("K-Means is mainly used for?", ["Clustering", "Classification labels", "Sorting", "Encryption"], 0),
-        ("Activation function commonly used for binary classification output?", ["ReLU", "Sigmoid", "Tanh", "Linear"], 1),
-        ("Which technique reduces dimensionality?", ["PCA", "CNN", "RNN", "LSTM"], 0),
-        ("A neural network is inspired by?", ["Computer", "Brain", "Database", "Algorithm"], 1)
     ]
 }
 
 GENERIC_QUESTIONS = [
     ("What is critical thinking?", ["Following instructions", "Analyzing information", "Memorizing facts", "Copying answers"], 1),
     ("Which skill is essential for effective learning?", ["Time management", "Social media", "Watching videos", "Skipping topics"], 0),
-    ("What is the scientific method based on?", ["Observation and experiment", "Tradition", "Authority", "Intuition"], 0),
-    ("Which learning style uses visual aids?", ["Auditory", "Visual", "Kinesthetic", "Logical"], 1),
-    ("What is the Pareto principle?", ["80/20 rule", "50/50 rule", "90/10 rule", "All topics equally"], 0),
-    ("Which approach is useful for complex problems?", ["Divide and conquer", "Ignore the problem", "Guessing", "Skipping"], 0),
-    ("What helps long-term retention?", ["Spaced repetition", "Cramming only", "Skipping revision", "Random study"], 0),
-    ("What is active recall?", ["Retrieving information from memory", "Reading only", "Copying notes", "Watching videos"], 0)
 ]
 
+# Sudoku Puzzles (10 unique)
+SUDOKU_PUZZLES = [
+    [
+        [5,3,0,0,7,0,0,0,0],
+        [6,0,0,1,9,5,0,0,0],
+        [0,9,8,0,0,0,0,6,0],
+        [8,0,0,0,6,0,0,0,3],
+        [4,0,0,8,0,3,0,0,1],
+        [7,0,0,0,2,0,0,0,6],
+        [0,6,0,0,0,0,2,8,0],
+        [0,0,0,4,1,9,0,0,5],
+        [0,0,0,0,8,0,0,7,9]
+    ],
+    [
+        [0,0,4,3,0,0,2,0,9],
+        [0,0,5,0,0,9,0,0,1],
+        [0,7,0,0,6,0,0,4,3],
+        [0,0,6,0,0,2,0,8,7],
+        [1,9,0,0,0,7,4,0,0],
+        [0,5,0,1,9,0,0,0,0],
+        [0,0,7,0,0,0,3,0,0],
+        [0,4,0,0,0,6,0,0,0],
+        [9,0,3,0,0,0,0,0,6]
+    ],
+]
+
+# Arrow Puzzles (10 unique)
+ARROW_PUZZLES = []
+for _ in range(10):
+    directions = ['↑', '→', '↓', '←']
+    size = 5
+    puzzle = []
+    solution = []
+    for i in range(size):
+        row = []
+        sol_row = []
+        for j in range(size):
+            if random.random() < 0.7:
+                dir_idx = random.randint(0, 3)
+                row.append(directions[dir_idx])
+                sol_row.append(dir_idx)
+            else:
+                row.append(' ')
+                sol_row.append(-1)
+        puzzle.append(row)
+        solution.append(sol_row)
+    ARROW_PUZZLES.append((puzzle, solution))
+
 # --------------------- HELPERS ----------------------------
+def add_to_feed(activity_type, description, details=""):
+    """Add activity to feed"""
+    new_entry = pd.DataFrame([{
+        "timestamp": pd.Timestamp.now(),
+        "activity_type": activity_type,
+        "description": description,
+        "details": details,
+        "user": st.session_state.username
+    }])
+    st.session_state.activity_feed = pd.concat([st.session_state.activity_feed, new_entry], ignore_index=True)
+    save_all()
+
 def get_topic_for_subject(subject):
     aliases = {
         "Python": ["Functions", "Lists & Dictionaries", "Exception Handling", "OOP", "File Handling"],
@@ -255,14 +456,39 @@ def get_topic_for_subject(subject):
     return f"{subject} Revision"
 
 def available_questions(subject):
-    matched = None
-    for key in TOPIC_BANK:
-        if key.lower() in str(subject).lower() or str(subject).lower() in key.lower():
-            matched = key
-            break
-    pool = TOPIC_BANK[matched].copy() if matched else GENERIC_QUESTIONS.copy()
-    random.shuffle(pool)
-    return pool[:5]
+    if subject not in st.session_state.quiz_question_pool:
+        matched = None
+        for key in TOPIC_BANK:
+            if key.lower() in str(subject).lower() or str(subject).lower() in key.lower():
+                matched = key
+                break
+        
+        if matched:
+            pool = TOPIC_BANK[matched].copy()
+        else:
+            pool = GENERIC_QUESTIONS.copy()
+        
+        random.shuffle(pool)
+        st.session_state.quiz_question_pool[subject] = pool
+        st.session_state.used_quiz_questions[subject] = []
+    
+    pool = st.session_state.quiz_question_pool[subject]
+    used = st.session_state.used_quiz_questions[subject]
+    
+    if len(used) >= len(pool):
+        st.session_state.used_quiz_questions[subject] = []
+        used = []
+    
+    available = [q for i, q in enumerate(pool) if i not in used]
+    num_questions = min(5, len(available))
+    selected = available[:num_questions]
+    
+    for q in selected:
+        idx = pool.index(q)
+        if idx not in used:
+            st.session_state.used_quiz_questions[subject].append(idx)
+    
+    return selected
 
 def calculate_priority(row):
     try:
@@ -282,18 +508,14 @@ def calculate_priority(row):
         return 0
 
 def priority_label(score):
-    if score >= 35:
-        return "🔥 Very High"
-    if score >= 25:
-        return "🔴 High"
-    if score >= 15:
-        return "🟠 Medium"
+    if score >= 35: return "🔥 Very High"
+    if score >= 25: return "🔴 High"
+    if score >= 15: return "🟠 Medium"
     return "🟢 Low"
 
 def get_recommendation():
     df = st.session_state.subjects.copy()
-    if df.empty:
-        return None
+    if df.empty: return None
     try:
         df["priority"] = df.apply(calculate_priority, axis=1)
         return df.sort_values("priority", ascending=False).iloc[0]
@@ -304,10 +526,49 @@ def generate_attempt_id(subject, topic):
     raw = f"{subject}_{topic}_{datetime.now().isoformat()}_{random.random()}"
     return hashlib.md5(raw.encode()).hexdigest()[:12]
 
+def get_grade(marks):
+    if marks >= 90: return "A+"
+    elif marks >= 80: return "A"
+    elif marks >= 70: return "B+"
+    elif marks >= 60: return "B"
+    elif marks >= 50: return "C+"
+    elif marks >= 40: return "C"
+    elif marks >= 33: return "D"
+    else: return "F"
+
+def get_performance_metrics():
+    prev_sem = st.session_state.previous_semester
+    mid_marks = st.session_state.mid_marks
+    
+    metrics = {
+        "avg_prev_marks": 0,
+        "avg_mid_marks": 0,
+        "subjects_improved": 0,
+        "total_subjects": 0,
+        "cgpa": 0
+    }
+    
+    if not prev_sem.empty:
+        metrics["avg_prev_marks"] = prev_sem["marks"].mean()
+        metrics["total_subjects"] = len(prev_sem)
+    
+    if not mid_marks.empty:
+        metrics["avg_mid_marks"] = mid_marks["marks"].mean()
+    
+    if not prev_sem.empty:
+        grades = [get_grade(m) for m in prev_sem["marks"]]
+        grade_points = {"A+": 10, "A": 9, "B+": 8, "B": 7, "C+": 6, "C": 5, "D": 4, "F": 0}
+        total_points = sum(grade_points.get(g, 0) for g in grades)
+        metrics["cgpa"] = round(total_points / len(grades), 2) if grades else 0
+    
+    return metrics
+
 def generate_smart_daily_plan():
     subjects = st.session_state.subjects.copy()
     sessions = st.session_state.sessions.copy()
     quizzes = st.session_state.quiz_results.copy()
+    prev_sem = st.session_state.previous_semester.copy()
+    mid_marks = st.session_state.mid_marks.copy()
 
     if subjects.empty:
         return []
@@ -331,10 +592,21 @@ def generate_smart_daily_plan():
             completed = int(row["completed_units"]) if pd.notna(row["completed_units"]) else 0
             remaining = max(units - completed, 0)
 
+            prev_performance = 0
+            if not prev_sem.empty:
+                prev_subject = prev_sem[prev_sem["subject"].astype(str).str.lower() == subject.lower()]
+                if not prev_subject.empty:
+                    prev_performance = float(prev_subject["marks"].mean())
+            
+            mid_performance = 0
+            if not mid_marks.empty:
+                mid_subject = mid_marks[mid_marks["subject"].astype(str).str.lower() == subject.lower()]
+                if not mid_subject.empty:
+                    mid_performance = float(mid_subject["marks"].mean())
+
             subject_quizzes = quizzes[
                 quizzes["subject"].astype(str).str.lower() == subject.lower()
             ] if not quizzes.empty else pd.DataFrame()
-
             quiz_avg = float(subject_quizzes["score"].mean()) if not subject_quizzes.empty else None
 
             recent_hours = 0
@@ -353,24 +625,27 @@ def generate_smart_daily_plan():
             syllabus_score = remaining / max(units, 1) * 10
             quiz_score = (100 - quiz_avg) / 10 if quiz_avg is not None else 5
             study_penalty = min(recent_hours * 0.5, 5)
+            
+            performance_penalty = 0
+            if prev_performance > 0 and prev_performance < 50:
+                performance_penalty = (50 - prev_performance) / 10
+            if mid_performance > 0 and mid_performance < 50:
+                performance_penalty += (50 - mid_performance) / 10
 
             smart_score = (
                 urgency_score + difficulty_score +
                 confidence_score + syllabus_score +
-                quiz_score - study_penalty
+                quiz_score - study_penalty + performance_penalty
             )
 
             reasons = []
-            if days_left <= 7:
-                reasons.append(f"Exam in {days_left} day(s)")
-            if confidence <= 2:
-                reasons.append("Low confidence")
-            if remaining > 0:
-                reasons.append(f"{remaining} unit(s) remaining")
-            if quiz_avg is not None and quiz_avg < 60:
-                reasons.append(f"Quiz average {quiz_avg:.0f}%")
-            if not reasons:
-                reasons.append("Good opportunity for revision")
+            if days_left <= 7: reasons.append(f"Exam in {days_left} day(s)")
+            if confidence <= 2: reasons.append("Low confidence")
+            if remaining > 0: reasons.append(f"{remaining} unit(s) remaining")
+            if quiz_avg is not None and quiz_avg < 60: reasons.append(f"Quiz average {quiz_avg:.0f}%")
+            if prev_performance < 50: reasons.append(f"Previous semester: {prev_performance:.0f}%")
+            if mid_performance < 50: reasons.append(f"Mid term: {mid_performance:.0f}%")
+            if not reasons: reasons.append("Good opportunity for revision")
 
             plan.append({
                 "subject": subject,
@@ -381,6 +656,8 @@ def generate_smart_daily_plan():
                 "remaining_units": remaining,
                 "quiz_avg": quiz_avg,
                 "recent_hours": recent_hours,
+                "prev_performance": prev_performance,
+                "mid_performance": mid_performance,
                 "reason": " + ".join(reasons)
             })
         except Exception:
@@ -388,743 +665,190 @@ def generate_smart_daily_plan():
 
     return sorted(plan, key=lambda x: x["score"], reverse=True)
 
-# --------------------- SIDEBAR ----------------------------
-with st.sidebar:
-    st.markdown("## 🧠 MindMate")
-    st.caption("Smart Semester Study Planner")
+# --------------------- GEMINI AI CHATBOT --------------------
+def setup_gemini(api_key):
+    """Setup Gemini AI with API key"""
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel('gemini-pro')
+        st.session_state.bot_available = True
+        return model
+    except Exception as e:
+        st.error(f"Error setting up Gemini: {e}")
+        st.session_state.bot_available = False
+        return None
 
-    page_icons = {
-        "🏠 Dashboard": "🏠",
-        "🧠 Smart Daily Plan": "🧠",
-        "📚 Semester Setup": "📚",
-        "⏱️ Study Session": "⏱️",
-        "📝 Quiz": "📝",
-        "💻 Coding Tracker": "💻",
-        "📅 Timetable": "📅",
-        "📊 Analytics": "📊"
-    }
-    
-    page = st.radio(
-        "Navigation",
-        list(page_icons.keys()),
-        index=list(page_icons.keys()).index(st.session_state.page) if st.session_state.page in page_icons else 0
-    )
-    
-    st.session_state.page = page
-
-    st.markdown("---")
-    st.caption("MindMate v4.3")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("💾 Save", use_container_width=True):
-            if save_all():
-                st.success("Saved!")
-    with col2:
-        if st.button("🔄 Refresh", use_container_width=True):
-            st.rerun()
-
-# ======================== DASHBOARD =======================
-if page == "🏠 Dashboard":
-    st.markdown('<div class="main-title">🧠 MindMate</div>', unsafe_allow_html=True)
-    st.markdown('<div class="subtitle">Your Smart Semester Study Planner & Analyzer</div>', unsafe_allow_html=True)
-
-    subjects = st.session_state.subjects
-    sessions = st.session_state.sessions
-    quizzes = st.session_state.quiz_results
-    coding = st.session_state.coding_problems
-
-    if subjects.empty:
-        st.warning("👋 Welcome! Start with Semester Setup.")
-        c1, c2, c3 = st.columns(3)
-        c1.metric("📚 Subjects", 0)
-        c2.metric("⏱️ Study Hours", "0.0h")
-        c3.metric("📝 Quiz Average", "0%")
-        st.info("Add subjects → add exams → use Smart Daily Plan → start studying.")
+def get_bot_response(prompt, model, context=""):
+    """Get response from Gemini AI"""
+    try:
+        full_prompt = f"""You are MindMate, an AI study assistant helping students with their academic queries. 
+        Context: {context}
+        Student Question: {prompt}
         
-        if st.button("🚀 Get Started", type="primary"):
-            st.session_state.page = "📚 Semester Setup"
-            st.rerun()
-    else:
-        total_hours = sessions["duration_min"].sum() / 60 if not sessions.empty else 0
-        quiz_avg = quizzes["score"].mean() if not quizzes.empty else 0
-        completed = int(subjects["completed_units"].sum()) if not subjects.empty else 0
-        total = int(subjects["units"].sum()) if not subjects.empty else 1
-        coding_count = len(coding)
-        progress = completed / total if total else 0
-
-        streak = 0
-        if not sessions.empty:
-            try:
-                dates = sorted(set(pd.to_datetime(sessions["date"], errors="coerce").dt.date.dropna()), reverse=True)
-                expected = date.today()
-                for d in dates:
-                    if d == expected:
-                        streak += 1
-                        expected -= timedelta(days=1)
-                    elif d < expected:
-                        break
-            except:
-                streak = 0
-
-        cols = st.columns(6)
-        metrics = [
-            (len(subjects), "📚 Subjects"),
-            (f"{total_hours:.1f}h", "⏱️ Study Hours"),
-            (f"{quiz_avg:.0f}%", "📝 Quiz Avg"),
-            (f"{completed}/{total}", "📖 Progress"),
-            (f"{streak}🔥", "Day Streak"),
-            (coding_count, "💻 Problems")
-        ]
-        for col, (value, label) in zip(cols, metrics):
-            with col:
-                st.markdown(f"<div class='metric-card'><div class='metric-value'>{value}</div><div class='metric-label'>{label}</div></div>", unsafe_allow_html=True)
-
-        st.markdown("---")
+        Please provide a helpful, clear, and educational response. If you don't know something, be honest about it."""
         
-        rec = get_recommendation()
-        left, right = st.columns([1.4, 1])
-        
-        with left:
-            st.subheader("🎯 Today's Priority")
-            if rec is not None:
-                score = calculate_priority(rec)
-                try:
-                    exam_date = pd.to_datetime(rec['exam_date']).strftime('%d %b %Y') if pd.notna(rec['exam_date']) else "No exam"
-                except:
-                    exam_date = "No exam"
-                    
-                st.markdown(f"""
-                <div class="card">
-                <h2>{rec['subject']}</h2>
-                <p><b>Priority:</b> {priority_label(score)}</p>
-                <p><b>Exam:</b> {exam_date}</p>
-                <p><b>Confidence:</b> {'⭐'*int(rec['confidence'])}{'☆'*(5-int(rec['confidence']))}</p>
-                <p><b>Units:</b> {rec['completed_units']}/{rec['units']}</p>
-                </div>
-                """, unsafe_allow_html=True)
-                
-                if st.button("🧠 Open Smart Daily Plan", type="primary", use_container_width=True):
-                    st.session_state.page = "🧠 Smart Daily Plan"
+        response = model.generate_content(full_prompt)
+        return response.text
+    except Exception as e:
+        return f"Sorry, I encountered an error: {str(e)}"
+
+def show_chatbot():
+    st.markdown("### 🤖 MindMate AI Assistant")
+    
+    # API Key Setup
+    with st.expander("⚙️ Setup AI Assistant (Gemini)", expanded=not st.session_state.gemini_api_key):
+        st.markdown("""
+        **Get your Gemini API Key:**
+        1. Go to [Google AI Studio](https://makersuite.google.com/app/apikey)
+        2. Create a new API key
+        3. Paste it below
+        """)
+        api_key = st.text_input("Enter Gemini API Key", type="password", value=st.session_state.gemini_api_key)
+        if st.button("🔑 Connect AI Assistant"):
+            if api_key:
+                st.session_state.gemini_api_key = api_key
+                model = setup_gemini(api_key)
+                if model:
+                    st.session_state.bot_model = model
+                    st.success("✅ AI Assistant connected successfully!")
                     st.rerun()
-
-            st.subheader("⏱️ Recent Study")
-            if sessions.empty:
-                st.info("No study sessions yet. Start your first session!")
             else:
-                try:
-                    for _, s in sessions.sort_values("date", ascending=False).head(5).iterrows():
-                        st.write(f"📚 **{s['subject']}** — {s['topic']} • {s['duration_min']} min")
-                except:
-                    st.info("Error displaying recent study sessions.")
-
-        with right:
-            st.subheader("📊 Syllabus Progress")
-            st.metric("Completion", f"{progress*100:.0f}%")
-            st.progress(min(progress, 1.0))
-            st.metric("🎯 Avg Productivity", f"{sessions['productivity'].mean():.1f}/5" if not sessions.empty else "—")
-            st.metric("📝 Quizzes Taken", len(quizzes))
-            st.metric("💻 Coding Problems", len(coding))
-
-        st.markdown("---")
-        st.subheader("📈 Performance Overview")
-        a, b = st.columns(2)
-
-        with a:
-            if not sessions.empty:
-                try:
-                    d = sessions.copy()
-                    d["date"] = pd.to_datetime(d["date"]).dt.date
-                    daily = d.groupby("date", as_index=False)["duration_min"].sum()
-                    fig = px.bar(daily.tail(14), x="date", y="duration_min", 
-                                title="📚 Study Time (Last 14 Days)", 
-                                labels={"duration_min": "Minutes"},
-                                color_discrete_sequence=["#667eea"])
-                    st.plotly_chart(fig, use_container_width=True)
-                except:
-                    st.info("Error generating study chart.")
-            else:
-                st.info("Start studying to generate charts!")
-
-        with b:
-            if not quizzes.empty:
-                try:
-                    q = quizzes.groupby("subject", as_index=False)["score"].mean()
-                    fig = px.bar(q, x="subject", y="score", range_y=[0, 100], 
-                                title="📝 Quiz Performance by Subject",
-                                color_discrete_sequence=["#764ba2"])
-                    st.plotly_chart(fig, use_container_width=True)
-                except:
-                    st.info("Error generating quiz chart.")
-            else:
-                st.info("Take quizzes to see performance!")
-
-# ================= SMART DAILY PLAN =======================
-elif page == "🧠 Smart Daily Plan":
-    st.markdown('<div class="main-title">🧠 Smart Daily Study Plan</div>', unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>MindMate creates today's plan from your exams, confidence, syllabus, quizzes and study history.</div>", unsafe_allow_html=True)
+                st.error("❌ Please enter an API key")
     
-    plan = generate_smart_daily_plan()
-
-    if not plan:
-        st.warning("⚠️ No subjects found. Please add subjects in Semester Setup first.")
-        if st.button("📚 Go to Semester Setup", type="primary"):
-            st.session_state.page = "📚 Semester Setup"
-            st.rerun()
+    # Chat Interface
+    st.markdown("### 💬 Chat with MindMate")
+    st.markdown("Ask me anything about your studies, subjects, or general academic questions!")
+    
+    # Bot status
+    if st.session_state.bot_available:
+        st.markdown('<span class="bot-status bot-online">🟢 AI Assistant Online</span>', unsafe_allow_html=True)
     else:
-        top = plan[0]
-        st.markdown(f"""
-        <div style="padding:25px;border-radius:16px;background:linear-gradient(135deg,#667eea,#764ba2);color:white;margin-bottom:20px;">
-        <h2>🎯 Top Priority: {top['subject']}</h2>
-        <p><b>Recommended topic:</b> {top['topic']}</p>
-        <p><b>Why:</b> {top['reason']}</p>
-        <p><b>Exam:</b> {top['days_left']} day(s) remaining</p>
-        <p><b>Confidence:</b> {'⭐'*top['confidence']}{'☆'*(5-top['confidence'])}</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        st.markdown("### 📚 Today's Study Plan")
-        durations = [45, 45, 30]
-        
-        for i, item in enumerate(plan[:3]):
-            with st.container():
-                st.markdown(f"""
-                <div class="card">
-                <h3>{['1️⃣','2️⃣','3️⃣'][i]} {item['subject']}</h3>
-                <p>📖 <b>Topic:</b> {item['topic']}</p>
-                <p>⏱️ <b>Duration:</b> {durations[i]} minutes</p>
-                <p>🎯 <b>Reason:</b> {item['reason']}</p>
-                <p>📊 <b>Smart Priority Score:</b> {item['score']:.1f}</p>
-                </div>
-                """, unsafe_allow_html=True)
-
-                if st.button(f"🚀 Start {item['subject']} Session", key=f"smart_{i}", use_container_width=True):
-                    st.session_state.current_subject = item["subject"]
-                    st.session_state.current_topic = item["topic"]
-                    st.session_state.study_duration = durations[i]
-                    st.session_state.study_start = datetime.now()
-                    st.session_state.study_end = datetime.now() + timedelta(minutes=durations[i])
-                    st.session_state.study_running = True
-                    st.success(f"✅ Session started for {item['subject']}!")
-                    st.rerun()
-
-        st.info("💡 Tip: After two focused sessions, take a 15-minute break. Then continue with the next priority.")
-
-        st.markdown("### 💻 Coding Practice Goal")
-        st.success("🎯 Solve 1 Easy + 1 Medium coding problem for placement practice today.")
-
-        st.markdown("### 📊 Full Priority List")
-        try:
-            table = pd.DataFrame([{
-                "Subject": x["subject"],
-                "Priority Score": round(x["score"], 1),
-                "Days to Exam": x["days_left"],
-                "Confidence": f"{x['confidence']}/5",
-                "Remaining Units": x["remaining_units"],
-                "Quiz Average": f"{x['quiz_avg']:.0f}%" if x["quiz_avg"] is not None else "No quiz"
-            } for x in plan])
-            st.dataframe(table, use_container_width=True, hide_index=True)
-        except:
-            st.info("Error generating plan table.")
-
-# ================= SEMESTER SETUP =========================
-elif page == "📚 Semester Setup":
-    st.markdown('<div class="main-title">📚 Semester Setup</div>', unsafe_allow_html=True)
-
-    # ADD SUBJECT FORM - This is what you were missing!
-    with st.expander("➕ Add New Subject", expanded=True):
-        with st.form("subject_form", clear_on_submit=True):
-            st.subheader("📝 Enter Subject Details")
-            
-            c1, c2 = st.columns(2)
-            with c1:
-                subject = st.text_input("Subject Name *", placeholder="e.g., Python Programming", help="Enter a unique subject name")
-                units = st.number_input("Total Units", min_value=1, max_value=20, value=5, help="Total number of units/chapters")
-                difficulty = st.selectbox("Difficulty Level", list(DIFFICULTY.keys()), help="How difficult is this subject?")
-            with c2:
-                confidence = st.slider("Confidence Level", 1, 5, 3, help="1 = Very Low, 5 = Very High")
-                exam_date = st.date_input("Exam Date", date.today() + timedelta(days=30), help="When is your exam?")
-                completed = st.number_input("Completed Units", min_value=0, max_value=20, value=0, help="How many units have you completed?")
-
-            submitted = st.form_submit_button("➕ Add Subject", type="primary")
-            if submitted:
-                if not subject.strip():
-                    st.error("❌ Please enter a subject name.")
-                elif completed > units:
-                    st.error("❌ Completed units cannot exceed total units.")
-                else:
-                    # Check for duplicate subject
-                    if not st.session_state.subjects.empty:
-                        existing = st.session_state.subjects["subject"].str.lower().tolist()
-                        if subject.strip().lower() in existing:
-                            st.error(f"❌ Subject '{subject.strip()}' already exists! Please use a different name.")
-                            st.stop()
-                    
-                    new = pd.DataFrame([{
-                        "subject": subject.strip(),
-                        "units": units,
-                        "difficulty": difficulty,
-                        "confidence": confidence,
-                        "exam_date": pd.Timestamp(exam_date),
-                        "completed_units": min(completed, units)
-                    }])
-                    st.session_state.subjects = pd.concat([st.session_state.subjects, new], ignore_index=True)
-                    if save_all():
-                        st.success(f"✅ Subject '{subject.strip()}' added successfully!")
-                        st.rerun()
-
-    # Display subjects
-    st.markdown("### 📚 Your Subjects")
-    if st.session_state.subjects.empty:
-        st.info("No subjects added yet. Add your first subject above!")
-    else:
-        st.dataframe(st.session_state.subjects, use_container_width=True, hide_index=True)
-
-        # Update subject section
-        st.markdown("### ✏️ Update Subject")
-        names = st.session_state.subjects["subject"].tolist()
-        selected = st.selectbox("Select Subject to Update", names, key="subject_select")
-        idx = st.session_state.subjects.index[st.session_state.subjects["subject"] == selected][0]
-        row = st.session_state.subjects.loc[idx]
-
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            new_completed = st.number_input("Completed Units", 0, int(row["units"]), int(row["completed_units"]), key="upd_completed")
-        with c2:
-            new_conf = st.slider("Confidence", 1, 5, int(row["confidence"]), key="upd_conf")
-        with c3:
-            new_diff = st.selectbox("Difficulty", list(DIFFICULTY.keys()), 
-                                   index=list(DIFFICULTY.keys()).index(row["difficulty"]), key="upd_diff")
-
-        col1, col2 = st.columns(2)
+        st.markdown('<span class="bot-status bot-offline">🔴 AI Assistant Offline (Set API key above)</span>', unsafe_allow_html=True)
+    
+    # Chat container
+    chat_container = st.container()
+    
+    with chat_container:
+        # Display chat history
+        for msg in st.session_state.chat_history:
+            if msg["role"] == "user":
+                st.markdown(f'<div class="chat-message chat-user">🧑‍🎓 {msg["content"]}<div class="chat-timestamp">{msg["time"]}</div></div>', unsafe_allow_html=True)
+            else:
+                st.markdown(f'<div class="chat-message chat-bot">🤖 {msg["content"]}<div class="chat-timestamp">{msg["time"]}</div></div>', unsafe_allow_html=True)
+    
+    # Chat input
+    with st.container():
+        col1, col2 = st.columns([5, 1])
         with col1:
-            if st.button("💾 Update Subject", use_container_width=True):
-                st.session_state.subjects.loc[idx, "completed_units"] = new_completed
-                st.session_state.subjects.loc[idx, "confidence"] = new_conf
-                st.session_state.subjects.loc[idx, "difficulty"] = new_diff
-                if save_all():
-                    st.success("✅ Subject updated!")
-                    st.rerun()
+            user_input = st.text_input("Type your question...", key="chat_input", placeholder="Ask MindMate anything...")
         with col2:
-            if st.button("🗑️ Delete Subject", use_container_width=True):
-                st.session_state.subjects = st.session_state.subjects.drop(idx).reset_index(drop=True)
-                if save_all():
-                    st.success("✅ Subject deleted!")
-                    st.rerun()
-
-    # Add Exam
-    st.markdown("---")
-    st.subheader("📅 Add Exam")
-    with st.expander("📝 Add Exam Details"):
-        with st.form("exam_form", clear_on_submit=True):
-            if st.session_state.subjects.empty:
-                st.warning("⚠️ Please add a subject first before adding exams.")
+            send_button = st.button("📤 Send", type="primary", use_container_width=True)
+        
+        if send_button and user_input:
+            # Add user message to chat
+            st.session_state.chat_history.append({
+                "role": "user",
+                "content": user_input,
+                "time": datetime.now().strftime("%I:%M %p")
+            })
+            
+            # Get bot response
+            if st.session_state.bot_available:
+                with st.spinner("🧠 Thinking..."):
+                    # Get context from user's subjects
+                    subjects = st.session_state.subjects
+                    context = ""
+                    if not subjects.empty:
+                        context = f"Student's subjects: {', '.join(subjects['subject'].tolist())}. "
+                    
+                    response = get_bot_response(user_input, st.session_state.bot_model, context)
             else:
-                exam_name = st.text_input("Exam Name", placeholder="e.g., Midterm, Final, Quiz 1")
-                exam_subject = st.selectbox("Subject", st.session_state.subjects["subject"].tolist(), key="exam_subject")
-                exam_day = st.date_input("Exam Date", date.today() + timedelta(days=14), key="exam_day")
-                
-                if st.form_submit_button("➕ Add Exam"):
-                    new = pd.DataFrame([{
-                        "exam_name": exam_name or "Semester Exam",
-                        "subject": exam_subject,
-                        "exam_date": pd.Timestamp(exam_day)
-                    }])
-                    st.session_state.exams = pd.concat([st.session_state.exams, new], ignore_index=True)
-                    if save_all():
-                        st.success("✅ Exam added successfully!")
-                        st.rerun()
-
-    if not st.session_state.exams.empty:
-        st.markdown("### 📋 Your Exams")
-        st.dataframe(st.session_state.exams, use_container_width=True, hide_index=True)
-
-# ================= STUDY SESSION ==========================
-elif page == "⏱️ Study Session":
-    st.markdown('<div class="main-title">⏱️ Study Session</div>', unsafe_allow_html=True)
-
-    if st.session_state.study_running:
-        remaining = max(0, (st.session_state.study_end - datetime.now()).total_seconds())
-        if remaining <= 0:
-            st.session_state.study_running = False
-            st.success("🎉 Session completed! Please save your session details.")
+                # Offline response
+                response = "I'm currently offline. Please set up your Gemini API key in the settings above to get AI-powered responses. For now, try checking your study materials!"
+            
+            # Add bot message to chat
+            st.session_state.chat_history.append({
+                "role": "bot",
+                "content": response,
+                "time": datetime.now().strftime("%I:%M %p")
+            })
+            
+            add_to_feed("Chat", f"Asked AI: {user_input[:50]}...", f"Response: {response[:100]}...")
             st.rerun()
-
-        mins = int(remaining // 60)
-        secs = int(remaining % 60)
-        st.markdown(f"<div class='study-timer'>{mins:02d}:{secs:02d}</div>", unsafe_allow_html=True)
-        st.info(f"📚 Studying: **{st.session_state.current_subject}** — {st.session_state.current_topic}")
-        
-        progress = 1 - (remaining / (st.session_state.study_duration * 60))
-        st.progress(min(progress, 1.0))
-
-        if st.button("⏹️ Finish Session", type="primary"):
-            with st.form("session_complete"):
-                st.subheader("📊 Session Summary")
-                technique = st.selectbox("Study Technique", TECHNIQUES)
-                mood = st.selectbox("How did you feel?", ["😄 Great", "🙂 Good", "😐 Okay", "😓 Tired", "😴 Very tired"])
-                distractions = st.slider("Distractions Level", 0, 5, 1)
-                productivity = st.slider("Productivity Level", 1, 5, 4)
-                
-                if st.form_submit_button("💾 Save Session"):
-                    new = pd.DataFrame([{
-                        "date": pd.Timestamp.now(),
-                        "subject": st.session_state.current_subject,
-                        "topic": st.session_state.current_topic,
-                        "duration_min": st.session_state.study_duration,
-                        "technique": technique,
-                        "mood": mood,
-                        "distractions": distractions,
-                        "productivity": productivity,
-                        "quiz_score": None
-                    }])
-                    st.session_state.sessions = pd.concat([st.session_state.sessions, new], ignore_index=True)
-                    st.session_state.study_running = False
-                    if save_all():
-                        st.success("✅ Session saved successfully!")
-                        st.rerun()
-    else:
-        st.subheader("🚀 Start a New Study Session")
-        
-        if st.session_state.subjects.empty:
-            st.warning("⚠️ Please add subjects first in Semester Setup.")
-            if st.button("📚 Go to Semester Setup"):
-                st.session_state.page = "📚 Semester Setup"
+    
+    # Clear chat button
+    if st.button("🗑️ Clear Chat History", use_container_width=True):
+        st.session_state.chat_history = []
+        st.rerun()
+    
+    # Suggested questions
+    st.markdown("### 💡 Suggested Questions")
+    cols = st.columns(3)
+    suggestions = [
+        "How can I improve my grades?",
+        "What's the best way to study?",
+        "Explain a concept to me",
+        "How to manage study time?",
+        "Tips for exam preparation",
+        "Help with understanding a topic"
+    ]
+    for i, suggestion in enumerate(suggestions):
+        with cols[i % 3]:
+            if st.button(suggestion, key=f"sugg_{i}", use_container_width=True):
+                st.session_state.chat_input = suggestion
                 st.rerun()
-        else:
-            with st.form("start_session"):
-                subject = st.selectbox("Select Subject", st.session_state.subjects["subject"].tolist())
-                topic = st.text_input("Topic", get_topic_for_subject(subject))
-                duration = st.select_slider("Duration (minutes)", 
-                                           options=[15, 25, 30, 45, 60, 90, 120], 
-                                           value=45)
-                
-                if st.form_submit_button("▶️ Start Study Session", type="primary"):
-                    if not topic.strip():
-                        st.error("Please enter a topic.")
-                    else:
-                        st.session_state.current_subject = subject
-                        st.session_state.current_topic = topic
-                        st.session_state.study_duration = duration
-                        st.session_state.study_start = datetime.now()
-                        st.session_state.study_end = datetime.now() + timedelta(minutes=duration)
-                        st.session_state.study_running = True
-                        st.success(f"✅ Session started! Study {subject} for {duration} minutes.")
-                        st.rerun()
 
-# ================= QUIZ ===================================
-elif page == "📝 Quiz":
-    st.markdown('<div class="main-title">📝 MindMate Quiz</div>', unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>Test your knowledge and track your progress</div>", unsafe_allow_html=True)
-
-    if st.session_state.subjects.empty:
-        st.warning("⚠️ Please add subjects first.")
-        if st.button("📚 Go to Semester Setup"):
-            st.session_state.page = "📚 Semester Setup"
-            st.rerun()
-    else:
-        subjects_list = st.session_state.subjects["subject"].tolist()
-
-        if not st.session_state.quiz_questions:
-            st.subheader("📝 Start a Quiz")
-            with st.form("quiz_setup"):
-                subject = st.selectbox("Select Subject", subjects_list, key="quiz_subject_select")
-                topic = st.text_input("Topic", get_topic_for_subject(subject), key="quiz_topic_input")
-                
-                if st.form_submit_button("🎯 Start Quiz", type="primary"):
-                    if not topic.strip():
-                        st.error("Please enter a topic.")
-                    else:
-                        st.session_state.quiz_subject = subject
-                        st.session_state.quiz_topic = topic
-                        st.session_state.quiz_questions = available_questions(subject)
-                        st.session_state.quiz_answers = {}
-                        st.session_state.quiz_submitted = False
-                        st.session_state.current_attempt_id = generate_attempt_id(subject, topic)
-                        st.rerun()
-        else:
-            st.subheader(f"📝 Quiz: {st.session_state.quiz_subject} — {st.session_state.quiz_topic}")
+# --------------------- ACTIVITY FEED ---------------------
+def show_activity_feed():
+    st.markdown("### 📋 Activity Feed")
+    st.markdown("Track all your activities in one place")
+    
+    # Filter options
+    feed = st.session_state.activity_feed.copy()
+    if feed.empty:
+        st.info("No activities yet. Start using MindMate to build your feed!")
+        return
+    
+    # Filters
+    col1, col2, col3 = st.columns([2, 2, 1])
+    with col1:
+        activity_types = ["All"] + list(feed["activity_type"].unique())
+        filter_type = st.selectbox("Filter by Type", activity_types)
+    with col2:
+        if filter_type != "All":
+            feed = feed[feed["activity_type"] == filter_type]
+    
+    # Sort by time (newest first)
+    feed = feed.sort_values("timestamp", ascending=False)
+    
+    # Display feed items
+    with st.container():
+        for _, item in feed.iterrows():
+            icon_map = {
+                "Subject Added": "📚",
+                "Exam Added": "📅",
+                "Study Session": "⏱️",
+                "Quiz Taken": "📝",
+                "Marks Added": "📊",
+                "Coding Problem": "💻",
+                "Chat": "🤖",
+                "Puzzle Solved": "🧩",
+                "Timetable Added": "📋"
+            }
+            icon = icon_map.get(item["activity_type"], "📌")
             
-            for i, (question, options, correct) in enumerate(st.session_state.quiz_questions):
-                st.markdown(f"**Q{i+1}.** {question}")
-                answer = st.radio("Select your answer", options, key=f"q_{i}", index=None)
-                if answer:
-                    st.session_state.quiz_answers[i] = options.index(answer)
-
-            col1, col2 = st.columns([1, 1])
-            with col1:
-                if st.button("✅ Submit Quiz", type="primary", use_container_width=True):
-                    if len(st.session_state.quiz_answers) < len(st.session_state.quiz_questions):
-                        st.warning("⚠️ Please answer all questions before submitting.")
-                    else:
-                        score = 0
-                        for i, (_, _, correct) in enumerate(st.session_state.quiz_questions):
-                            if st.session_state.quiz_answers.get(i) == correct:
-                                score += 1
-                        percent = score / len(st.session_state.quiz_questions) * 100
-
-                        new = pd.DataFrame([{
-                            "date": pd.Timestamp.now(),
-                            "subject": st.session_state.quiz_subject,
-                            "topic": st.session_state.quiz_topic,
-                            "score": percent,
-                            "questions": len(st.session_state.quiz_questions),
-                            "attempt_id": st.session_state.current_attempt_id
-                        }])
-                        st.session_state.quiz_results = pd.concat([st.session_state.quiz_results, new], ignore_index=True)
-
-                        attempt = pd.DataFrame([{
-                            "attempt_id": st.session_state.current_attempt_id,
-                            "subject": st.session_state.quiz_subject,
-                            "topic": st.session_state.quiz_topic,
-                            "attempt_time": pd.Timestamp.now(),
-                            "question_hash": hashlib.md5(str(st.session_state.quiz_questions).encode()).hexdigest(),
-                            "completed": True
-                        }])
-                        st.session_state.quiz_attempts = pd.concat([st.session_state.quiz_attempts, attempt], ignore_index=True)
-                        save_all()
-
-                        st.success(f"🎉 Score: {score}/{len(st.session_state.quiz_questions)} ({percent:.0f}%)")
-                        
-                        st.subheader("📊 Detailed Results")
-                        for i, (question, options, correct) in enumerate(st.session_state.quiz_questions):
-                            if st.session_state.quiz_answers.get(i) == correct:
-                                st.success(f"✅ Q{i+1}: Correct! - {question}")
-                            else:
-                                st.error(f"❌ Q{i+1}: Correct answer — **{options[correct]}**")
-
-                        st.session_state.quiz_questions = []
-                        st.session_state.quiz_answers = {}
-                        st.session_state.quiz_submitted = True
-
-                        if st.button("📝 Start New Quiz", type="primary"):
-                            st.session_state.quiz_submitted = False
-                            st.rerun()
-            
-            with col2:
-                if st.button("❌ Cancel Quiz", use_container_width=True):
-                    st.session_state.quiz_questions = []
-                    st.session_state.quiz_answers = {}
-                    st.rerun()
-
-# ================= CODING =================================
-elif page == "💻 Coding Tracker":
-    st.markdown('<div class="main-title">💻 Coding Tracker</div>', unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>Track your coding practice for placement preparation</div>", unsafe_allow_html=True)
-
-    with st.expander("➕ Add Coding Problem", expanded=True):
-        with st.form("coding_form", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            with c1:
-                problem_id = st.text_input("Problem ID", placeholder="e.g., LC-1")
-                name = st.text_input("Problem Name *")
-                platform = st.selectbox("Platform", CODING_PLATFORMS)
-                difficulty = st.selectbox("Difficulty", CODING_DIFFICULTIES)
-            with c2:
-                topic = st.text_input("Topic", "Arrays")
-                language = st.selectbox("Programming Language", CODING_LANGUAGES)
-                time_taken = st.number_input("Time Taken (minutes)", min_value=1, max_value=500, value=30)
-                score = st.slider("Self Score (%)", 0, 100, 80)
-
-            if st.form_submit_button("➕ Add Problem", type="primary"):
-                if not name.strip():
-                    st.error("❌ Please enter a problem name.")
-                else:
-                    new = pd.DataFrame([{
-                        "problem_id": problem_id,
-                        "platform": platform,
-                        "problem_name": name.strip(),
-                        "difficulty": difficulty,
-                        "topic": topic,
-                        "date_solved": pd.Timestamp.now(),
-                        "time_taken": time_taken,
-                        "language": language,
-                        "score": score
-                    }])
-                    st.session_state.coding_problems = pd.concat([st.session_state.coding_problems, new], ignore_index=True)
-                    if save_all():
-                        st.success(f"✅ {name} added successfully!")
-                        st.rerun()
-
-    cp = st.session_state.coding_problems
-    if cp.empty:
-        st.info("No coding problems tracked yet. Start tracking your practice!")
-    else:
-        c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Total Problems", len(cp))
-        c2.metric("Easy", len(cp[cp["difficulty"] == "Easy"]))
-        c3.metric("Medium", len(cp[cp["difficulty"] == "Medium"]))
-        c4.metric("Hard", len(cp[cp["difficulty"] == "Hard"]))
-
-        a, b = st.columns(2)
-        with a:
-            try:
-                p = cp["platform"].value_counts().reset_index()
-                p.columns = ["Platform", "Problems"]
-                fig = px.bar(p, x="Platform", y="Problems", title="Problems by Platform",
-                            color_discrete_sequence=["#667eea"])
-                st.plotly_chart(fig, use_container_width=True)
-            except:
-                st.info("Error generating platform chart.")
-        with b:
-            try:
-                d = cp["difficulty"].value_counts().reset_index()
-                d.columns = ["Difficulty", "Problems"]
-                fig = px.pie(d, names="Difficulty", values="Problems", 
-                            title="Difficulty Distribution",
-                            color_discrete_sequence=["#2ecc71", "#f1c40f", "#e74c3c"])
-                st.plotly_chart(fig, use_container_width=True)
-            except:
-                st.info("Error generating difficulty chart.")
-
-        st.subheader("📊 All Problems")
-        st.dataframe(cp.sort_values("date_solved", ascending=False), use_container_width=True, hide_index=True)
-
-# ================= TIMETABLE ==============================
-elif page == "📅 Timetable":
-    st.markdown('<div class="main-title">📅 Timetable</div>', unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>Plan your weekly study schedule</div>", unsafe_allow_html=True)
-
-    with st.expander("➕ Add Timetable Slot", expanded=True):
-        with st.form("time_form", clear_on_submit=True):
-            day = st.selectbox("Day", ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"])
-            c1, c2 = st.columns(2)
-            start = c1.time_input("Start Time")
-            end = c2.time_input("End Time")
-            
-            subject_options = st.session_state.subjects["subject"].tolist() if not st.session_state.subjects.empty else ["General"]
-            subject = st.selectbox("Subject", subject_options, key="timetable_subject")
-            
-            if st.form_submit_button("➕ Add Slot", type="primary"):
-                if start >= end:
-                    st.error("❌ End time must be after start time.")
-                else:
-                    new = pd.DataFrame([{
-                        "day": day,
-                        "start": str(start),
-                        "end": str(end),
-                        "subject": subject
-                    }])
-                    st.session_state.timetable = pd.concat([st.session_state.timetable, new], ignore_index=True)
-                    if save_all():
-                        st.success("✅ Timetable slot added!")
-                        st.rerun()
-
-    if st.session_state.timetable.empty:
-        st.info("No timetable slots added yet. Create your study schedule!")
-    else:
-        days_order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
-        timetable = st.session_state.timetable.copy()
-        timetable["day"] = pd.Categorical(timetable["day"], categories=days_order, ordered=True)
-        timetable = timetable.sort_values("day")
-        
-        st.subheader("📋 Your Weekly Schedule")
-        st.dataframe(timetable, use_container_width=True, hide_index=True)
-
-# ================= ANALYTICS ==============================
-elif page == "📊 Analytics":
-    st.markdown('<div class="main-title">📊 Analytics</div>', unsafe_allow_html=True)
-    st.markdown("<div class='subtitle'>Detailed insights into your study performance</div>", unsafe_allow_html=True)
-
-    s = st.session_state.sessions
-    q = st.session_state.quiz_results
-    c = st.session_state.coding_problems
-    sub = st.session_state.subjects
-
-    if sub.empty:
-        st.warning("⚠️ No data available. Start by adding subjects and tracking your study sessions!")
-        if st.button("📚 Go to Semester Setup", type="primary"):
-            st.session_state.page = "📚 Semester Setup"
-            st.rerun()
-    else:
-        if not s.empty:
-            st.subheader("⏱️ Study Time Analysis")
-            a, b = st.columns(2)
-            with a:
-                try:
-                    x = s.copy()
-                    x["date"] = pd.to_datetime(x["date"]).dt.date
-                    daily = x.groupby("date", as_index=False)["duration_min"].sum()
-                    fig = px.line(daily, x="date", y="duration_min", markers=True, 
-                                 title="Study Trend Over Time",
-                                 labels={"duration_min": "Minutes Studied"},
-                                 color_discrete_sequence=["#667eea"])
-                    st.plotly_chart(fig, use_container_width=True)
-                except:
-                    st.info("Error generating study trend chart.")
-            with b:
-                try:
-                    bysub = s.groupby("subject", as_index=False)["duration_min"].sum()
-                    fig = px.pie(bysub, names="subject", values="duration_min", 
-                                hole=0.3, title="Study Time by Subject",
-                                color_discrete_sequence=px.colors.qualitative.Set3)
-                    st.plotly_chart(fig, use_container_width=True)
-                except:
-                    st.info("Error generating study time chart.")
-
-        if not q.empty:
-            st.subheader("📝 Quiz Performance")
-            try:
-                qq = q.groupby("subject", as_index=False)["score"].mean()
-                fig = px.bar(qq, x="subject", y="score", range_y=[0, 100], 
-                            text_auto=".0f", title="Average Quiz Score by Subject",
-                            color_discrete_sequence=["#764ba2"])
-                st.plotly_chart(fig, use_container_width=True)
-            except:
-                st.info("Error generating quiz analytics.")
-
-        if not c.empty:
-            st.subheader("💻 Coding Practice")
-            try:
-                cc = c.groupby("language").size().reset_index(name="Problems")
-                fig = px.bar(cc, x="language", y="Problems", 
-                            title="Problems by Language",
-                            color_discrete_sequence=["#e67e22"])
-                st.plotly_chart(fig, use_container_width=True)
-            except:
-                st.info("Error generating coding analytics.")
-
-        st.subheader("🎯 Subject Health Dashboard")
-        health = []
-        for _, r in sub.iterrows():
-            try:
-                qs = q[q["subject"].astype(str).str.lower() == str(r["subject"]).lower()] if not q.empty else pd.DataFrame()
-                avg = qs["score"].mean() if not qs.empty else None
-                
-                sh = s[s["subject"].astype(str).str.lower() == str(r["subject"]).lower()] if not s.empty else pd.DataFrame()
-                total_hours = sh["duration_min"].sum() / 60 if not sh.empty else 0
-                
-                health.append({
-                    "Subject": r["subject"],
-                    "Confidence": f"{r['confidence']}/5",
-                    "Syllabus": f"{int(r['completed_units'])}/{int(r['units'])}",
-                    "Study Hours": f"{total_hours:.1f}h",
-                    "Quiz Score": f"{avg:.0f}%" if avg is not None else "No quiz",
-                    "Priority": round(calculate_priority(r), 1)
-                })
-            except:
-                continue
-        
-        if health:
-            df_health = pd.DataFrame(health).sort_values("Priority", ascending=False)
-            st.dataframe(df_health, use_container_width=True, hide_index=True)
-
-        st.subheader("📊 Summary Statistics")
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("Total Study Hours", f"{s['duration_min'].sum()/60:.1f}h" if not s.empty else "0h")
-        with col2:
-            st.metric("Average Productivity", f"{s['productivity'].mean():.1f}/5" if not s.empty else "-")
-        with col3:
-            st.metric("Average Quiz Score", f"{q['score'].mean():.0f}%" if not q.empty else "-")
-        with col4:
-            st.metric("Coding Problems", len(c))
-
-# --------------------- FOOTER ----------------------------
-st.markdown("---")
-st.markdown("""
-<div style="text-align: center; color: #666; padding: 10px;">
-    <p>🧠 MindMate v4.3 | Smart Semester Study Planner</p>
-    <p style="font-size: 12px;">Made with ❤️ for students</p>
-</div>
-""", unsafe_allow_html=True)
+            st.markdown(f"""
+            <div class="feed-item">
+                <div>
+                    <span class="icon">{icon}</span>
+                    <strong>{item['activity_type']}</strong>
+                    <span class="time">• {item['timestamp'].strftime('%I:%M %p, %b %d')}</span>
+                </div>
+                <div>{item['description']}</div>
+                {f"<div style='font-size:12px;color:#666;margin-top:4px;'>{item['details']}</div>" if pd.notna(item['details']) and item['details'] else ""}
+            </div>
+            """, unsafe_allow_html=True)
+    
+    # Clear feed button
+    if st.button("🗑️ Clear Activity Feed", type="secondary"):
+        st.session_state.activity_feed = empty_df("activity_feed")
