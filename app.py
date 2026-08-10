@@ -755,7 +755,6 @@ def show_chatbot():
             # Get bot response
             if st.session_state.bot_available and GEMINI_AVAILABLE:
                 with st.spinner("🧠 Thinking..."):
-                    # Get context from user's subjects
                     subjects = st.session_state.subjects
                     context = ""
                     if not subjects.empty:
@@ -763,13 +762,11 @@ def show_chatbot():
                     
                     response = get_bot_response(user_input, st.session_state.bot_model, context)
             else:
-                # Offline response
                 if not GEMINI_AVAILABLE:
                     response = "⚠️ AI Assistant is not available. Please install the required package: `pip install google-generativeai`"
                 else:
                     response = "I'm currently offline. Please set up your Gemini API key in the settings above to get AI-powered responses. For now, try checking your study materials!"
             
-            # Add bot message to chat
             st.session_state.chat_history.append({
                 "role": "bot",
                 "content": response,
@@ -779,12 +776,10 @@ def show_chatbot():
             add_to_feed("Chat", f"Asked AI: {user_input[:50]}...", f"Response: {response[:100]}...")
             st.rerun()
     
-    # Clear chat button
     if st.button("🗑️ Clear Chat History", use_container_width=True):
         st.session_state.chat_history = []
         st.rerun()
     
-    # Suggested questions
     st.markdown("### 💡 Suggested Questions")
     cols = st.columns(3)
     suggestions = [
@@ -806,13 +801,11 @@ def show_activity_feed():
     st.markdown("### 📋 Activity Feed")
     st.markdown("Track all your activities in one place")
     
-    # Filter options
     feed = st.session_state.activity_feed.copy()
     if feed.empty:
         st.info("No activities yet. Start using MindMate to build your feed!")
         return
     
-    # Filters
     col1, col2 = st.columns([2, 2])
     with col1:
         activity_types = ["All"] + list(feed["activity_type"].unique())
@@ -822,10 +815,8 @@ def show_activity_feed():
             feed = feed[feed["activity_type"] == filter_type]
         st.caption(f"Showing {len(feed)} activities")
     
-    # Sort by time (newest first)
     feed = feed.sort_values("timestamp", ascending=False)
     
-    # Display feed items
     for _, item in feed.iterrows():
         icon_map = {
             "Subject Added": "📚",
@@ -840,6 +831,10 @@ def show_activity_feed():
         }
         icon = icon_map.get(item["activity_type"], "📌")
         
+        details_text = ""
+        if pd.notna(item["details"]) and item["details"]:
+            details_text = f"<div style='font-size:12px;color:#666;margin-top:4px;'>{item['details']}</div>"
+        
         st.markdown(f"""
         <div class="feed-item">
             <div>
@@ -848,4 +843,8 @@ def show_activity_feed():
                 <span class="time">• {item['timestamp'].strftime('%I:%M %p, %b %d')}</span>
             </div>
             <div>{item['description']}</div>
-            {f"<div style='font-size:12px;color:#666;margin-top:4px;
+            {details_text}
+        </div>
+        """, unsafe_allow_html=True)
+    
+    if st.button("🗑️ Clear Activity Feed
